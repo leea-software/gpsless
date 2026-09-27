@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fast privacy check on every commit; the pre-push hook adds location checks.
+exec python3 "$(git rev-parse --show-toplevel)/tools/privacy_check.py" --no-recordings

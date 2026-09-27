@@ -1,0 +1,1 @@
+This repository does not accept pull requests; they are closed without review. Please fork it instead for noncommercial use (PolyForm Noncommercial code, ODbL map data), or open an issue describing the problem. See CONTRIBUTING.md.

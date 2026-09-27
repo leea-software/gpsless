@@ -1,0 +1,6 @@
+// Shared signing defaults. Simulator builds need nothing here.
+// For a device build, copy Local.xcconfig.example to Local.xcconfig (ignored by
+// Git) and set your own development team and bundle identifier there.
+DEVELOPMENT_TEAM =
+GPSLESS_BUNDLE_IDENTIFIER = software.leea.gpsless
+#include? "Local.xcconfig"

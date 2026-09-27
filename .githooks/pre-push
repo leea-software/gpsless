@@ -1,0 +1,3 @@
+#!/bin/sh
+# Full privacy check, including coordinates and road IDs near your own drives.
+exec python3 "$(git rev-parse --show-toplevel)/tools/privacy_check.py"

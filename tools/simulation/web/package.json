@@ -1,0 +1,9 @@
+{
+  "name": "gpsless-simulation-viewer",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "three": "0.186.0"
+  }
+}

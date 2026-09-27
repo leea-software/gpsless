@@ -1,0 +1,3 @@
+// Copy to Config/Local.xcconfig (ignored by Git) for device builds.
+DEVELOPMENT_TEAM = ABCDE12345
+GPSLESS_BUNDLE_IDENTIFIER = com.example.gpsless

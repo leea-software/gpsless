@@ -1,0 +1,3 @@
+numpy==2.4.3
+scipy==1.17.1
+gnss-ins-sim @ git+https://github.com/Aceinna/gnss-ins-sim.git@966ff271bf21d08fbd0e31d1eb47fa5f3acef8d3

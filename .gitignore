@@ -1,0 +1,33 @@
+.build/
+build/
+DerivedData/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+tools/.venv/
+data-source/
+artifacts/
+__pycache__/
+tools/simulation/.venv/
+tools/simulation/web/node_modules/
+
+# Personal signing and private strings for tools/privacy_check.py
+Config/Local.xcconfig
+Config/private-patterns.txt
+*.mobileprovision
+*.p12
+*.cer
+
+# Drive recordings, exports and device data are personal data
+*.jsonl
+*.jsonl.gz
+Drives/
+FieldReferences/
+*.xcappdata/
+*.xcresult/
+
+# Local tooling
+.claude/
+.vscode/
+.idea/
+*.bundle

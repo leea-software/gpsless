@@ -1,0 +1,42 @@
+name: Bug report or field result
+description: Something wrong, or how the tracker behaved with your car and phone
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Privacy:** do not attach drive recordings, exported drives or screenshots that show where you live, work or park. Recordings contain positions and timestamps even without GPS tracing.
+  - type: input
+    id: version
+    attributes:
+      label: App and engine version
+      placeholder: "0.3.1 (21), engine 3.1-route-sequence"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: iPhone model, iOS version and mount
+      placeholder: "iPhone 15 Pro, iOS 27.0, rigid vent mount, portrait"
+  - type: input
+    id: car
+    attributes:
+      label: Car wheelbase and refinement setting
+      placeholder: "2.70 m, refine from route turns on"
+  - type: textarea
+    id: situation
+    attributes:
+      label: Road situation
+      description: Straight, curvy, mountain, traffic jam, stop-and-go, roundabout; distance and duration.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What the app showed and what actually happened
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sensor details (optional)
+      description: Vibration speed, axle echo strength, turn fixes, speed fixes, uncertainty.

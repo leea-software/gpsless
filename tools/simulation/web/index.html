@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>GPSLess · Simulation Lab</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/"}}</script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="GPSLess Simulation Lab"><span class="brand-mark">↗</span> GPSLess <span class="brand-divider"></span><span class="lab-name">Simulation Lab</span></a>
+    <div class="header-right"><span class="local"><i></i> LOCAL · KYIV</span><button id="new-run" class="primary">＋ New simulation</button></div>
+  </header>
+  <div id="notice" role="status" hidden></div>
+  <div class="workspace">
+    <aside class="library">
+      <div class="library-heading"><h2>Run library</h2><span id="run-count" class="count">0</span></div>
+      <div class="filters" role="group" aria-label="Filter runs"><button data-filter="all" class="selected">All</button><button data-filter="synthetic">Simulated</button><button data-filter="recorded">Field</button></div>
+      <div id="runs" class="run-list"><p class="empty">Loading local recordings…</p></div>
+      <div class="library-footer"><span class="eyebrow">AUTONOMOUS TESTING</span><p>Two routes. Three sensor profiles.<br>Every failure stays inspectable.</p><button id="batch-run" class="secondary">Run 6-trial suite <span>↗</span></button><p id="job-status" aria-live="polite">Ready to simulate</p></div>
+    </aside>
+    <main>
+      <div class="run-header"><div><div class="eyebrow" id="run-type">KYIV / OFFLINE ROAD NETWORK</div><h1 id="run-title">Select a run to inspect</h1></div><button id="details-button" class="subtle">Run details ↗</button></div>
+      <div id="truth-note" class="truth-note">Known synthetic truth and recorded estimates are labelled separately.</div>
+      <div class="diagnostic-layout">
+        <section class="visual-panel" aria-label="3D replay">
+          <div class="scene-toolbar"><div class="legend"><span><i class="truth-dot"></i><b id="reference-label">Simulated car</b></span><span><i class="estimate-dot"></i>Current engine</span><span><i class="correction-dot"></i>Turn correction</span></div><div class="view-buttons"><button id="drive-view" aria-pressed="true">Drive</button><button id="fit-view" title="Fit the complete route">Fit route</button><button id="top-view">Top</button><button id="follow-view" aria-pressed="false">Follow</button><button id="cinema-view" aria-pressed="false">Cinema ↗</button></div></div>
+          <div id="scene"><div id="scene-error" hidden></div><div class="scene-coordinate"><span id="road-name">KYIV ROAD GRAPH</span><small id="scene-caption">Third-person camera · select Fit route to orbit freely</small></div><div class="north">N <span>↑</span></div><div class="scene-scale">Real Kyiv road geometry · illustrative city and vehicle</div><div class="drive-brand"><span class="brand-mark">↗</span><div>GPSLess<small>DRIVE BEYOND GPS.</small></div></div><div class="drive-hud"><div class="hud-tag" id="hud-kind">SIMULATED DRIVE</div><div class="hud-speed"><strong id="hud-speed">0</strong><span>KM/H</span></div><div class="hud-bottom"><span>KYIV</span><span class="hud-status">GPS OFF</span></div></div></div>
+          <div class="playback"><button id="play" aria-label="Play replay" disabled>▶</button><button id="restart" aria-label="Restart replay" disabled>↤</button><output id="time">00:00.0</output><input id="scrubber" aria-label="Replay time" type="range" min="0" max="1" step="any" value="0" disabled><span id="duration">00:00</span><label class="speed-control"><span class="sr-only">Playback speed</span><select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select></label></div>
+        </section>
+        <aside class="telemetry">
+          <div class="telemetry-title"><span class="eyebrow">AT PLAYHEAD</span><span id="tracking-state" class="state">—</span></div>
+          <div class="live-metrics"><div><span>Engine speed</span><strong id="speed-value">—</strong><small id="truth-speed">km/h</small></div><div><span id="error-label">Position error</span><strong id="error-value">—</strong><small id="error-unit">metres</small></div></div>
+          <dl class="readouts"><div><dt>Road probability</dt><dd id="probability">—</dd></div><div><dt>Uncertainty radius</dt><dd id="uncertainty">—</dd></div><div><dt>Accepted turns</dt><dd id="anchors">—</dd></div><div><dt>Current road edge</dt><dd id="edge">—</dd></div></dl>
+          <div class="section-heading"><h2>Road signals</h2><span id="event-count" class="count">0</span></div><div id="events" class="events"><p class="empty">Select a run</p></div>
+          <details class="hypotheses"><summary>Competing road hypotheses</summary><div id="hypotheses"></div></details>
+        </aside>
+      </div>
+      <section class="signals-panel"><div class="section-heading"><h2>Synchronized signals</h2><span class="chart-legend"><i class="estimate-dot"></i>Engine input <span id="comparison-legend" hidden><i class="truth-dot"></i>Recorded drive</span></span></div><div class="charts"><div class="chart"><label for="channel-a">Motion channel</label><select id="channel-a"><option value="forwardAcceleration">Forward acceleration · m/s²</option><option value="lateralAcceleration">Lateral acceleration · m/s²</option><option value="verticalAcceleration">Vertical acceleration · m/s²</option></select><canvas id="chart-a" aria-label="Acceleration chart"></canvas></div><div class="chart"><label for="channel-b">Rotation channel</label><select id="channel-b"><option value="yawRate">Yaw rate · °/s</option><option value="pitch">Mount pitch · °</option><option value="roll">Mount roll · °</option></select><canvas id="chart-b" aria-label="Rotation chart"></canvas></div><div class="chart"><label for="channel-c">Position channel</label><select id="channel-c"><option value="error">Position error · m</option><option value="speed">Speed · km/h</option><option value="adjustment">Road adjustment · m</option></select><canvas id="chart-c" aria-label="Position chart"></canvas></div></div></section>
+      <section id="comparison-panel" hidden><div class="section-heading"><h2>Recorded vs simulated sensors</h2><span>First 160 s · same inferred route</span></div><p id="comparison-note"></p><div class="table-scroll"><table><thead><tr><th>Signal</th><th>Recorded RMS</th><th>Simulated RMS</th><th>Recorded p95 |value|</th><th>Simulated p95 |value|</th></tr></thead><tbody id="comparison-table"></tbody></table></div></section>
+      <footer class="main-footer"><span>Map data © OpenStreetMap contributors · offline snapshot</span><a id="export-run" href="#" download>Download replay JSON ↓</a></footer>
+    </main>
+  </div>
+  <dialog id="simulation-dialog"><form id="simulation-form"><div class="dialog-heading"><div><span class="eyebrow">GENERATE A DRIVE</span><h2>New Kyiv simulation</h2></div><button type="button" data-close="simulation-dialog" class="close" aria-label="Close">×</button></div><p>A legal route is selected autonomously. Sensor data enters the same Swift engine used by the iPhone app.</p><div class="form-grid"><label>Random seed<input name="seed" type="number" min="0" max="2147483500" value="42" required></label><label>Sensor profile<select name="profile"><option value="nominal">Nominal · assumed phone</option><option value="ideal">Ideal · diagnostic control</option><option value="field-inspired">Field-inspired · short-term noise fit</option><option value="stress">Stress · drift, tilt and dropped samples</option></select></label><label>Route length · metres<input name="length" type="number" min="300" max="5000" step="100" value="1200" required></label><label>Cruise limit · km/h<input name="speedKmh" type="number" min="10" max="90" value="40" required></label><label>Kyiv starting area<select id="start-area"><option value="217386">Centre · Khreshchatyk</option><option value="244659">Obolon · Obolonskyi Avenue</option><option value="105914">Left bank · Krakivska Street</option><option value="14702">Solomianka · Nishchynskoho Street</option></select></label><label>Initial position error · metres<input name="startOffset" type="number" min="-30" max="30" value="0" required><small>Moves the engine start along its initial edge.</small></label><label>Starting road edge<input name="startEdge" type="number" min="0" max="255979" value="217386" required><small>Selected above, or enter an edge ID from a replay.</small></label></div><p class="dialog-note">Vehicle suspension, road height and Core Motion gravity separation are approximations. A simulation pass does not establish field accuracy.</p><p id="form-error" role="alert"></p><button type="submit" class="primary wide">Generate and track drive</button></form></dialog>
+  <dialog id="details-dialog"><div class="dialog-heading"><h2>Run details</h2><button data-close="details-dialog" class="close" aria-label="Close">×</button></div><div id="run-details"></div></dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
