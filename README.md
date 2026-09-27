@@ -9,8 +9,9 @@ An iPhone app that follows your car along a route **without GPS** — for places
 ## Features
 
 - **No-GPS tracking** along a chosen route: speed from the road-bump echo between the front and rear axles, position corrected at every turn and bend.
-- **Offline maps** of Kyiv and the Lviv region, including unpaved Carpathian tracks, with places, peaks, stations, fuel, shops, food and landmarks labelled.
-- **Offline search** for villages, towns, districts and streets, in Ukrainian or Latin letters; Apple Maps search when viewing satellite imagery.
+- **Offline maps** of Kyiv and the Lviv region, including unpaved Carpathian tracks, with places, peaks, stations, fuel, shops, food, landmarks and speed cameras labelled.
+- **Corridor maps** for long journeys across oblasts, built on your Mac from OpenStreetMap along your route and kept private.
+- **Offline search** for villages, towns, districts, streets and fuel stations, in Ukrainian or Latin letters; Apple Maps search when viewing satellite imagery.
 - **Offline routing** with up to three alternatives (fastest, shortest and a distinct one) and route changes while paused.
 - **Satellite view** to find your exact starting point.
 - **Keeps running** in the background and with the screen locked.

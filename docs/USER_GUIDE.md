@@ -26,3 +26,12 @@ The most recent fix in each Core Location callback is recorded at most once per 
 
 GPS is **reference data only**: neither live motion processing, road matching, speed/stop calculations nor replay consumes these records. Tracing does not calibrate the engine automatically. Core Location is an iOS location solution, not a raw satellite measurement, and reported accuracy does not prove immunity to interference or spoofing. Later analysis must screen the reference and use separate drives for calibration and validation. Inferred acquisition uptime uses the receipt clock pair; `wall_clock_changed` flags identify a discontinuity requiring care during alignment.
 
+
+## Long journeys
+
+The bundled maps cover Kyiv and the Lviv region. For a drive across several oblasts, build a corridor map on your Mac (see [Technical notes](TECHNICAL.md), "Offline data") and install the app again: it appears under **More → Map region** next to the bundled maps. Plan the whole route on it before leaving.
+
+- Stops: after a fuel stop, **Car stayed here · resume** is offered while the estimate is still precise; otherwise set the position again. Search finds fuel stations by name or brand (for example OKKO or WOG) as well as towns and streets.
+- Long straight roads without turns let the uncertainty grow; it shrinks again at the next matched turn or junction. Tracking continues up to 10 km of uncertainty.
+- Keep the phone charging: tracking keeps the screen on and records about 1.8 MB per minute.
+- Speed cameras are drawn in red with their limit.

@@ -2,6 +2,12 @@
 
 Engine versions are recorded in every drive recording (`engineVersion`).
 
+## 0.3.2 (build 22)
+
+- Corridor maps for long journeys across several oblasts: `tools/build_corridor.py` keeps full detail along a route and whole areas you name; the app offers them next to the bundled maps. They are built on your Mac and kept out of Git.
+- Fuel stations are searchable by name or brand; fixed speed cameras appear on the map with their limit.
+- Engine 3.1.1 `3.1.1-route-sequence`: route lookups use an index, so a 660 km route starts in 0.1 s instead of 91 s on a Mac; a locked route keeps tracking up to 10 km of uncertainty, since the driver cannot stop on a highway to set the position again.
+
 ## 0.3.1 (build 21) — first public release
 
 - Engine 3.1 `3.1-route-sequence`: route position tracked with several weighted hypotheses across successive turns, so repeated bends on mountain roads resolve and the uncertainty shrinks at each confirmed turn; the estimate waits at a bend until the gyro shows the turn; locked routes only stop above 1,000 m of uncertainty.

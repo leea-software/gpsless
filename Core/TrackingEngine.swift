@@ -213,7 +213,7 @@ struct TurnObservation {
 
 /// A bounded road-constrained particle filter. No location or network inputs exist.
 public final class TrackingEngine {
-    static let version = "3.1-route-sequence"
+    static let version = "3.1.1-route-sequence"
     public let graph: RoadGraph
     public private(set) var estimate: TrackingEstimate?
     /// Speed corrections from road bumps since start, counted once per
@@ -299,6 +299,7 @@ public final class TrackingEngine {
     private let routeSuccessors: [Int: Int]
     private let routeLandmarks: [RouteTurnLandmark]
     private let routeEvidenceMatcher: RouteEvidenceMatcher?
+    private var routeIndex: RouteIndex?
     private var expectedRouteLandmarkIndex = 0
 
     public init(graph: RoadGraph, seed: UInt64 = 7829, route: SelectedRoute? = nil) {
@@ -313,8 +314,10 @@ public final class TrackingEngine {
         }
         routeSuccessors = successors
         if let route {
-            routeLandmarks = RouteTurnLandmark.build(route: route, graph: graph)
-            routeEvidenceMatcher = RouteEvidenceMatcher(route: route, graph: graph)
+            let index = RouteIndex(route: route, graph: graph)
+            routeIndex = index
+            routeLandmarks = RouteTurnLandmark.build(route: index, graph: graph)
+            routeEvidenceMatcher = RouteEvidenceMatcher(route: index, graph: graph)
         } else {
             routeLandmarks = []
             routeEvidenceMatcher = nil
@@ -441,7 +444,7 @@ public final class TrackingEngine {
         pendingCurvatureEvidence = nil
         expectedRouteLandmarkIndex = 0
         routeEvidenceMatcher?.start(at: nil)
-        if let route, let startOffset = route.offset(of: position, graph: graph) {
+        if let routeIndex, let startOffset = routeIndex.offset(of: position) {
             while expectedRouteLandmarkIndex < routeLandmarks.count,
                   routeLandmarks[expectedRouteLandmarkIndex].end <= startOffset + 5 {
                 expectedRouteLandmarkIndex += 1
@@ -783,7 +786,7 @@ public final class TrackingEngine {
                     decision = "path_boundary"
                     if particles.allSatisfy({ particle in
                         let distance = graph.pathOffset[particle.position.edge] + particle.position.distance
-                        if let route, route.offset(of: path.position(at: distance - candidate), graph: graph) == nil {
+                        if let routeIndex, routeIndex.offset(of: path.position(at: distance - candidate)) == nil {
                             return false
                         }
                         return distance >= candidate
@@ -1408,7 +1411,7 @@ public final class TrackingEngine {
             }
         }
         var position = graph.paths[bestGroup.key].position(at: distance)
-        if let route, route.offset(of: position, graph: graph) == nil {
+        if let routeIndex, routeIndex.offset(of: position) == nil {
             // A route can leave and later rejoin the same continuous map path.
             // Averaging those separated hypotheses must not display a point
             // on a section which the selected route never visits.
@@ -1595,9 +1598,10 @@ public final class TrackingEngine {
     }
 
     /// On a locked route later turns can re-establish the position, so a long
-    /// featureless stretch only degrades the estimate instead of ending it.
+    /// featureless stretch only degrades the estimate instead of ending it:
+    /// on a highway the driver cannot stop to set the position again.
     private var maximumUncertainty: Double {
-        return route == nil ? 350 : 1000
+        return route == nil ? 350 : 10_000
     }
 
     /// Along-road uncertainty accumulated since the last position reset, as a
@@ -1634,14 +1638,14 @@ public final class TrackingEngine {
         }
         let radius = max(40, turn.startUncertainty + speed * (turn.end - turn.start))
         var candidates: [TurnLandmark]
-        if let route, let startOffset = route.offset(of: turn.startPosition, graph: graph) {
+        if let routeIndex, let startOffset = routeIndex.offset(of: turn.startPosition) {
             candidates = routeLandmarks.filter { candidate in
                 if let previousOffset = lastTimedLandmark?.routeOffset, candidate.midpoint <= previousOffset + 20 {
                     return false
                 }
                 return abs(candidate.midpoint - startOffset) <= radius && abs(angleDifference(candidate.angle, turn.angle)) < 0.20
             }.map { candidate in
-                return candidate.landmark(route: route, graph: graph)
+                return candidate.landmark(route: routeIndex, graph: graph)
             }
         } else {
             candidates = TurnLandmark.candidates(graph: graph, start: turn.startPosition, endPath: path,
@@ -1718,7 +1722,7 @@ public final class TrackingEngine {
             guard let position = landmark.position(at: state.position, graph: graph) else {
                 return (nil, "Angle match only; timed correction exceeds the supported connected geometry")
             }
-            if let route, route.offset(of: position, graph: graph) == nil {
+            if let routeIndex, routeIndex.offset(of: position) == nil {
                 return (nil, "Angle match only; timed correction falls outside the selected route")
             }
             if let route, position.edge == route.destination.edge, position.distance > route.destination.distance {
@@ -1796,7 +1800,7 @@ public final class TrackingEngine {
         var weightedOffset = 0.0
         var weight = 0.0
         for particle in particles {
-            guard let offset = route.offset(of: particle.position, graph: graph) else {
+            guard let offset = routeIndex?.offset(of: particle.position) else {
                 continue
             }
             weightedOffset += offset * particle.weight
@@ -1844,7 +1848,7 @@ public final class TrackingEngine {
             return
         }
 
-        let routeLength = route.distance(in: graph)
+        let routeLength = routeIndex?.length ?? route.distance(in: graph)
         // The dominant route hypothesis already combines this feature with the
         // earlier matched sequence and the odometer since then.
         let anchorName = decision.anchor ?? "end"
@@ -1896,11 +1900,11 @@ public final class TrackingEngine {
         }
         let adjustment = gain * (targetOffset - offsetBefore)
         for index in particles.indices {
-            guard let offset = route.offset(of: particles[index].position, graph: graph) else {
+            guard let offset = routeIndex?.offset(of: particles[index].position) else {
                 continue
             }
             let correctedOffset = clamp(offset + adjustment, 0, routeLength)
-            if let corrected = route.position(at: correctedOffset, graph: graph) {
+            if let corrected = routeIndex?.position(at: correctedOffset) {
                 particles[index].position = corrected
                 particles[index].curvatureReference = nil
             }

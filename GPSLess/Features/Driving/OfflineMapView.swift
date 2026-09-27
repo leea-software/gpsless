@@ -19,7 +19,9 @@ struct OfflineMapView: UIViewRepresentable {
         map.showsUserLocation = false
         map.isRotateEnabled = false
         map.isPitchEnabled = false
-        map.minimumZoomLevel = 10
+        // Low enough to show a whole long-distance route; minor roads only
+        // appear from zoom 10 so the overview stays fast.
+        map.minimumZoomLevel = 5
         map.maximumZoomLevel = 19
         map.logoView.isHidden = true
         map.attributionButton.isHidden = true
@@ -82,7 +84,7 @@ struct OfflineMapView: UIViewRepresentable {
         ("bank", "banknote.fill", "#6F86B0"), ("post", "envelope.fill", "#6F86B0"), ("civic", "building.2.fill", "#6F86B0"),
         ("emergency", "shield.fill", "#E5534B"), ("sport", "figure.run", "#43A96E"), ("park", "leaf.fill", "#43A96E"),
         ("camp", "tent.fill", "#43A96E"), ("peak", "mountain.2.fill", "#B08968"), ("ski", "cablecar.fill", "#45A9DE"),
-        ("rail", "tram.fill", "#4A86DE"), ("transit", "bus.fill", "#4A86DE")
+        ("rail", "tram.fill", "#4A86DE"), ("transit", "bus.fill", "#4A86DE"), ("camera", "camera.fill", "#E5484D")
     ]
 
     /// Settlements, districts and points of interest above the roads. Each
@@ -163,10 +165,10 @@ struct OfflineMapView: UIViewRepresentable {
                 ["id": "background", "type": "background", "paint": ["background-color": "#111c22"]],
                 ["id": "green", "type": "fill", "source": "areas", "filter": ["==", "kind", "green"], "paint": ["fill-color": "#203932", "fill-opacity": 0.8]],
                 ["id": "water", "type": "fill", "source": "areas", "filter": ["==", "kind", "water"], "paint": ["fill-color": "#173f52"]],
-                ["id": "road-casing", "type": "line", "source": "roads", "layout": ["line-cap": "round", "line-join": "round"], "paint": ["line-color": "#0b1318", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.5, 14, 5, 18, 16]]],
-                ["id": "streets", "type": "line", "source": "roads", "filter": ["!=", "kind", "track"], "layout": ["line-cap": "round", "line-join": "round"], "paint": ["line-color": "#52646d", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 2.5, 18, 12]]],
-                ["id": "tracks", "type": "line", "source": "roads", "filter": ["==", "kind", "track"], "paint": ["line-color": "#7a6a52", "line-dasharray": [2, 1.5], "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 1.8, 18, 7]]],
-                ["id": "major-roads", "type": "line", "source": "roads", "filter": ["in", "kind", "primary", "secondary", "trunk", "motorway", "tertiary"], "layout": ["line-cap": "round", "line-join": "round"], "paint": ["line-color": "#879896", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.5, 14, 4, 18, 14]]],
+                ["id": "road-casing", "type": "line", "source": "roads", "minzoom": 10, "layout": ["line-cap": "round", "line-join": "round"], "paint": ["line-color": "#0b1318", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.5, 14, 5, 18, 16]]],
+                ["id": "streets", "type": "line", "source": "roads", "minzoom": 10, "filter": ["!=", "kind", "track"], "layout": ["line-cap": "round", "line-join": "round"], "paint": ["line-color": "#52646d", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 2.5, 18, 12]]],
+                ["id": "tracks", "type": "line", "source": "roads", "minzoom": 11, "filter": ["==", "kind", "track"], "paint": ["line-color": "#7a6a52", "line-dasharray": [2, 1.5], "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 1.8, 18, 7]]],
+                ["id": "major-roads", "type": "line", "source": "roads", "filter": ["in", "kind", "primary", "secondary", "trunk", "motorway", "tertiary"], "layout": ["line-cap": "round", "line-join": "round"], "paint": ["line-color": "#879896", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.6, 10, 1.5, 14, 4, 18, 14]]],
                 ["id": "street-labels", "type": "symbol", "source": "roads", "minzoom": 13, "layout": ["symbol-placement": "line", "text-field": "{name}", "text-font": ["Open Sans Semibold"], "text-size": 11, "symbol-spacing": 350, "text-max-angle": 35], "paint": ["text-color": "#c5d2d3", "text-halo-color": "#142129", "text-halo-width": 1.5]]
             ] + labelLayers
         ]

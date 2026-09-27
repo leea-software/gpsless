@@ -6,6 +6,8 @@ name repeated in many villages yields one entry per village. Every entry also
 carries Latin forms (name:en and the Ukrainian national transliteration) so
 "Slavske" and "Славсько" both match.
 
+Fuel stations are included too, findable by name or brand.
+
 Usage: build_search.py kyiv|lviv [output-directory]   (needs pyosmium)
 """
 import json
@@ -26,6 +28,7 @@ REGIONS = {
 PLACE_KINDS = {"city": 0, "town": 1, "village": 2, "suburb": 3, "hamlet": 4, "neighbourhood": 5, "quarter": 5}
 SETTLEMENTS = {"city", "town", "village", "hamlet"}
 STREET_RANK = 6
+FUEL_RANK = 5
 CLUSTER_METRES = 1500
 
 LATIN = {"а": "a", "б": "b", "в": "v", "г": "h", "ґ": "g", "д": "d", "е": "e", "є": "ie", "ж": "zh", "з": "z", "и": "y",
@@ -63,31 +66,56 @@ def metres(lat, lon, lat0):
 
 
 class Places(osmium.SimpleHandler):
-    def __init__(self, bounds):
+    def __init__(self, bounds, inside=None):
         super().__init__()
         self.bounds = bounds
+        self.inside = inside
         self.places = {}
+        self.fuel = {}
+
+    def within(self, lat, lon):
+        south, west, north, east = self.bounds
+        return south <= lat <= north and west <= lon <= east and (self.inside is None or self.inside(lat, lon))
+
+    def fuel_station(self, identifier, tags, lat, lon):
+        # Drivers look fuel stations up by brand ("OKKO", "WOG") as often as by name.
+        name = tags.get("name:uk") or tags.get("name") or tags.get("brand")
+        if not name or not self.within(lat, lon):
+            return
+        latin = [value for value in (tags.get("brand:en"), tags.get("name:en"), tags.get("brand"), transliterate(name)) if value]
+        self.fuel[identifier] = {"n": name, "l": list(dict.fromkeys(latin)), "k": "fuel", "c": "", "y": round(lat, 5),
+                                 "x": round(lon, 5), "r": FUEL_RANK}
+
+    def way(self, way):
+        if way.tags.get("amenity") != "fuel":
+            return
+        points = [(node.location.lat, node.location.lon) for node in way.nodes if node.location.valid()]
+        if points:
+            self.fuel_station(("w", way.id), way.tags, sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points))
 
     def node(self, node):
+        if node.tags.get("amenity") == "fuel":
+            self.fuel_station(("n", node.id), node.tags, node.location.lat, node.location.lon)
         kind = node.tags.get("place")
         name = node.tags.get("name:uk") or node.tags.get("name")
         if kind not in PLACE_KINDS or not name:
             return
         lat, lon = node.location.lat, node.location.lon
-        south, west, north, east = self.bounds
-        if not (south <= lat <= north and west <= lon <= east):
+        if not self.within(lat, lon):
             return
         latin = [value for value in (node.tags.get("name:en"), transliterate(name)) if value]
         self.places[node.id] = {"n": name, "l": list(dict.fromkeys(latin)), "k": kind, "c": "", "y": round(lat, 5),
                                 "x": round(lon, 5), "r": PLACE_KINDS[kind]}
 
 
-def build(region, output):
+def build(region, output, sources=None, inside=None):
+    """`sources` defaults to the region's extracts; `inside(lat, lon)` limits
+    entries to a corridor."""
     graph = json.loads((output / f"{region}-graph.json").read_text())
     bounds = graph["bounds"]
-    places = Places(bounds)
-    for path in REGIONS[region]:
-        places.apply_file(str(path))
+    places = Places(bounds, inside)
+    for path in sources or REGIONS[region]:
+        places.apply_file(str(path), locations=True, idx="flex_mem")
     place_list = list(places.places.values())
     lat0 = (bounds[0] + bounds[2]) / 2
     settlements = [place for place in place_list if place["k"] in SETTLEMENTS]
@@ -168,9 +196,13 @@ def build(region, output):
     for place in place_list:
         if place["k"] not in SETTLEMENTS:
             place["c"] = nearest_settlement(place["y"], place["x"])
-    entries = sorted(place_list, key=lambda entry: (entry["r"], entry["n"])) + sorted(streets, key=lambda entry: (entry["n"], entry["c"]))
+    fuel = list(places.fuel.values())
+    for station in fuel:
+        station["c"] = nearest_settlement(station["y"], station["x"])
+    entries = (sorted(place_list, key=lambda entry: (entry["r"], entry["n"])) + sorted(fuel, key=lambda entry: (entry["n"], entry["c"]))
+               + sorted(streets, key=lambda entry: (entry["n"], entry["c"])))
     write_json(output / f"{region}-search.json", {"region": region, "snapshot": graph["generated"], "entries": entries})
-    print(json.dumps({"region": region, "places": len(place_list), "streets": len(streets),
+    print(json.dumps({"region": region, "places": len(place_list), "fuel": len(fuel), "streets": len(streets),
                       "settlements": len(settlements), "bytes": (output / f"{region}-search.json").stat().st_size}))
 
 

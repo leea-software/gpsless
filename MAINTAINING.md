@@ -53,4 +53,4 @@ Keep README.md short: what it is, the main features in a line each, limitations,
 
 ## Never publish
 
-Recordings, exports, GPS traces, device containers, `build/`, `data-source/`, `artifacts/`, `Config/Local.xcconfig`, `Config/private-patterns.txt`, personal emails or names, the Apple team ID, device identifiers, and coordinates, road edge IDs or place names derived from your own drives.
+Recordings, exports, GPS traces, device containers, `build/`, `data-source/`, `artifacts/`, `Config/Local.xcconfig`, `Config/private-patterns.txt`, corridor maps (`GPSLess/OfflineData/local-*`) and their waypoints, personal emails or names, the Apple team ID, device identifiers, and coordinates, road edge IDs or place names derived from your own drives.

@@ -11,14 +11,18 @@ struct RouteTurnLandmark {
     let outgoing: Int
 
     static func build(route: SelectedRoute, graph: RoadGraph) -> [RouteTurnLandmark] {
-        let length = route.distance(in: graph)
+        return build(route: RouteIndex(route: route, graph: graph), graph: graph)
+    }
+
+    static func build(route routeIndex: RouteIndex, graph: RoadGraph) -> [RouteTurnLandmark] {
+        let length = routeIndex.length
         guard length >= 60 else {
             return []
         }
         var headings: [(distance: Double, heading: Double)] = []
         for distance in stride(from: 5.0, through: length - 5, by: 5) {
-            guard let before = route.position(at: distance - 5, graph: graph),
-                  let after = route.position(at: distance + 5, graph: graph) else {
+            guard let before = routeIndex.position(at: distance - 5),
+                  let after = routeIndex.position(at: distance + 5) else {
                 continue
             }
             let vector = graph.coordinate(after).metres - graph.coordinate(before).metres
@@ -70,8 +74,8 @@ struct RouteTurnLandmark {
                 accumulated += delta
             }
             guard let midpoint,
-                  let incoming = route.position(at: start, graph: graph),
-                  let outgoing = route.position(at: end, graph: graph) else {
+                  let incoming = routeIndex.position(at: start),
+                  let outgoing = routeIndex.position(at: end) else {
                 continue
             }
             result.append(RouteTurnLandmark(start: start, end: end, midpoint: midpoint, angle: total,
@@ -80,7 +84,7 @@ struct RouteTurnLandmark {
         return result
     }
 
-    func landmark(route: SelectedRoute, graph: RoadGraph) -> TurnLandmark {
+    func landmark(route: RouteIndex, graph: RoadGraph) -> TurnLandmark {
         return TurnLandmark(incoming: incoming, outgoing: outgoing,
                             incomingPath: graph.pathIndex[incoming], outgoingPath: graph.pathIndex[outgoing],
                             incomingDistance: graph.pathOffset[incoming], outgoingDistance: graph.pathOffset[outgoing],

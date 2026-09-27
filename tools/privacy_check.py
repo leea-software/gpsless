@@ -32,7 +32,7 @@ ALLOWED_EMAIL_DOMAINS = ("example.com", "users.noreply.github.com")
 FORBIDDEN_PATHS = [
     r"\.jsonl(\.gz)?$", r"(^|/)Drives/", r"(^|/)FieldReferences/", r"\.xcresult(/|$)", r"\.xcappdata(/|$)",
     r"\.mobileprovision$", r"\.p12$", r"\.cer$", r"^Config/Local\.xcconfig$", r"^Config/private-patterns\.txt$",
-    r"^build/", r"^\.build/", r"^data-source/", r"^artifacts/", r"(^|/)xcuserdata/",
+    r"^build/", r"^\.build/", r"^data-source/", r"^artifacts/", r"(^|/)xcuserdata/", r"^GPSLess/OfflineData/local-",
 ]
 # Generated OpenStreetMap data legitimately contains every district name.
 PUBLIC_DATA = re.compile(r"^GPSLess/OfflineData/.*\.(json|geojson|pbf)$")

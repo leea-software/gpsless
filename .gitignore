@@ -31,3 +31,6 @@ FieldReferences/
 .vscode/
 .idea/
 *.bundle
+
+# Corridor maps for someone's own journey (tools/build_corridor.py)
+GPSLess/OfflineData/local-*

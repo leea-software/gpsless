@@ -19,7 +19,40 @@ struct MapRegion: Identifiable, Equatable {
                                 summary: "Lviv Oblast; tracks and the Zakarpattia side around Slavske",
                                 center: Coordinate(latitude: 49.8440, longitude: 24.0263), zoom: 13,
                                 testingStart: Coordinate(latitude: 49.8440, longitude: 24.0263))
-    static let all = [kyiv, lviv]
+    static let all = [kyiv, lviv] + local
+
+    /// Corridor maps built locally by tools/build_corridor.py for a particular
+    /// journey. They are never in Git; each sits in OfflineData with an
+    /// `<id>-region.json` describing it.
+    static let local: [MapRegion] = {
+        struct Manifest: Decodable {
+            let id: String
+            let name: String
+            let summary: String
+            let center: [Double]
+            let zoom: Double
+            let testingStart: [Double]
+        }
+        guard let folder = Bundle.main.url(forResource: "OfflineData", withExtension: nil),
+              let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return files.filter { url in
+            return url.lastPathComponent.hasSuffix("-region.json")
+        }.compactMap { url in
+            guard let data = try? Data(contentsOf: url),
+                  let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+                  manifest.center.count == 2, manifest.testingStart.count == 2 else {
+                return nil
+            }
+            return MapRegion(id: manifest.id, name: manifest.name, summary: manifest.summary,
+                             center: Coordinate(latitude: manifest.center[0], longitude: manifest.center[1]),
+                             zoom: manifest.zoom,
+                             testingStart: Coordinate(latitude: manifest.testingStart[0], longitude: manifest.testingStart[1]))
+        }.sorted { first, second in
+            return first.name < second.name
+        }
+    }()
 
     static func named(_ id: String?) -> MapRegion {
         return all.first { region in

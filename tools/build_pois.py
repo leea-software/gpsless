@@ -1,7 +1,8 @@
 """Build the offline map's place and point-of-interest labels for a bundled region.
 
 Named settlements, peaks, stations and everyday places (fuel, shops, food,
-lodging, health, landmarks, ski lifts...) inside the region's graph bounds,
+lodging, health, landmarks, ski lifts...) and fixed speed cameras inside the
+region's graph bounds,
 as GeoJSON points with a short category, a label priority and the zoom from
 which each is shown. Points come from OSM nodes and the centres of mapped
 buildings and areas; a place mapped both ways is kept once.
@@ -86,16 +87,24 @@ def category(tags):
 
 
 class Points(osmium.SimpleHandler):
-    def __init__(self, bounds):
+    def __init__(self, bounds, inside=None):
         super().__init__()
         self.bounds = bounds
+        self.corridor = inside
         self.features = []
 
     def inside(self, lat, lon):
         south, west, north, east = self.bounds
-        return south <= lat <= north and west <= lon <= east
+        return south <= lat <= north and west <= lon <= east and (self.corridor is None or self.corridor(lat, lon))
 
     def add(self, tags, lat, lon):
+        if tags.get("highway") == "speed_camera":
+            # Fixed enforcement cameras, labelled with their limit where mapped.
+            if self.inside(lat, lon):
+                limit = tags.get("maxspeed", "")
+                label = f"{limit} km/h" if limit.isdigit() else "Camera"
+                self.features.append((label, "camera", 3, 13, lat, lon, None))
+            return
         name = tags.get("name:uk") or tags.get("name")
         if not name or not self.inside(lat, lon):
             return
@@ -134,10 +143,12 @@ class Points(osmium.SimpleHandler):
         self.add(way.tags, lat, lon)
 
 
-def build(region, output):
+def build(region, output, sources=None, inside=None):
+    """`sources` defaults to the region's extracts; `inside(lat, lon)` limits
+    labels to a corridor."""
     graph = json.loads((output / f"{region}-graph.json").read_text())
-    handler = Points(graph["bounds"])
-    for path in REGIONS[region]:
+    handler = Points(graph["bounds"], inside)
+    for path in sources or REGIONS[region]:
         handler.apply_file(str(path), locations=True, idx="flex_mem")
     lat0 = math.radians((graph["bounds"][0] + graph["bounds"][2]) / 2)
     kept = []

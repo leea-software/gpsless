@@ -45,6 +45,7 @@
 		D876729A05DBAE64DD1DBD50 /* RoadGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5E077F2205D017A59281AD /* RoadGraph.swift */; };
 		DF097AD63C63E5D1D0BDF562 /* PlaceSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBD473D51DA4688FBB37ED5 /* PlaceSearch.swift */; };
 		E32D4E18E8E5BD1ABC182271 /* NavigationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A973EA4874BE7B8723A014 /* NavigationStore.swift */; };
+		EC32E604F2C14A2C138ED21B /* RouteIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 757021B6B818E3C1CE1692FD /* RouteIndex.swift */; };
 		F3FEE453CFE967DB9D33B004 /* VisualSpeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08F93C9EB0FBAC1727A4DE76 /* VisualSpeed.swift */; };
 		F80047F757155E225CF48115 /* OfflineMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0093CDC7B43259601C3872EA /* OfflineMapView.swift */; };
 /* End PBXBuildFile section */
@@ -86,6 +87,7 @@
 		69E8A228516DDF88CFC5D239 /* Geometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Geometry.swift; sourceTree = "<group>"; };
 		6B1C8E01FD1092D59003A96E /* WheelbaseCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WheelbaseCalibration.swift; sourceTree = "<group>"; };
 		6B22FF25CE60AAEE3A8833FF /* VehicleMotionProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VehicleMotionProcessor.swift; sourceTree = "<group>"; };
+		757021B6B818E3C1CE1692FD /* RouteIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteIndex.swift; sourceTree = "<group>"; };
 		7A5F46934E7841B7FAFF3B1F /* FieldReferenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldReferenceStore.swift; sourceTree = "<group>"; };
 		7F1E0D3925B50F0925C8DC97 /* SelectedRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectedRoute.swift; sourceTree = "<group>"; };
 		80CB506F3E27071D4454800B /* VehicleSpeedObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VehicleSpeedObserver.swift; sourceTree = "<group>"; };
@@ -138,6 +140,7 @@
 				1786AE5992AE32F5B49B4BFE /* RoadPath.swift */,
 				01EF7D7B9C52B3C5EBE99CFE /* RouteAlternatives.swift */,
 				48C84FA0A2175890196BB79F /* RouteEvidenceMatcher.swift */,
+				757021B6B818E3C1CE1692FD /* RouteIndex.swift */,
 				4CA8332E4133BACDD16224A3 /* RouteTurnLandmark.swift */,
 				7F1E0D3925B50F0925C8DC97 /* SelectedRoute.swift */,
 				67A62202BFCF5431B2C56CBC /* TrackingEngine.swift */,
@@ -429,6 +432,7 @@
 				3A854E94EB8780AA6C962C7B /* RoadPath.swift in Sources */,
 				069113AB420A197172C3B6B2 /* RouteAlternatives.swift in Sources */,
 				66DEED7D74A1003D65762D1D /* RouteEvidenceMatcher.swift in Sources */,
+				EC32E604F2C14A2C138ED21B /* RouteIndex.swift in Sources */,
 				86482636A28F3849E0100587 /* RouteTurnLandmark.swift in Sources */,
 				1D7B6F999AF738512CEF66CC /* SatelliteSelectionScreen.swift in Sources */,
 				6554020C83B7193C198EC679 /* SelectedRoute.swift in Sources */,
@@ -579,13 +583,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				INFOPLIST_FILE = GPSLess/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.1;
+				MARKETING_VERSION = 0.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(GPSLESS_BUNDLE_IDENTIFIER)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -597,13 +601,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				INFOPLIST_FILE = GPSLess/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.1;
+				MARKETING_VERSION = 0.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(GPSLESS_BUNDLE_IDENTIFIER)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;

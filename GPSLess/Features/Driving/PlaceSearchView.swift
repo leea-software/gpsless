@@ -147,7 +147,7 @@ struct PlaceSearchView: View {
 
     private func detail(_ result: SearchResult) -> String {
         let kinds = ["city": "City", "town": "Town", "village": "Village", "hamlet": "Hamlet", "suburb": "District",
-                     "neighbourhood": "Neighbourhood", "quarter": "Neighbourhood", "street": "Street"]
+                     "neighbourhood": "Neighbourhood", "quarter": "Neighbourhood", "street": "Street", "fuel": "Fuel station"]
         var parts = [kinds[result.entry.kind] ?? result.entry.kind.capitalized]
         if !result.entry.context.isEmpty && result.entry.context != result.entry.name {
             parts.append(result.entry.context)

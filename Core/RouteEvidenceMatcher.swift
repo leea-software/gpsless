@@ -110,6 +110,10 @@ final class RouteEvidenceMatcher {
     private var startTime: Double?
 
     init(route: SelectedRoute, graph: RoadGraph) {
+        features = Self.buildFeatures(route: RouteIndex(route: route, graph: graph), graph: graph)
+    }
+
+    init(route: RouteIndex, graph: RoadGraph) {
         features = Self.buildFeatures(route: route, graph: graph)
     }
 
@@ -313,8 +317,9 @@ final class RouteEvidenceMatcher {
         }
     }
 
-    private static func buildFeatures(route: SelectedRoute, graph: RoadGraph) -> [RouteFeature] {
-        let routeLength = route.distance(in: graph)
+    private static func buildFeatures(route index: RouteIndex, graph: RoadGraph) -> [RouteFeature] {
+        let route = index.route
+        let routeLength = index.length
         guard routeLength >= 40 else {
             return []
         }
@@ -322,8 +327,8 @@ final class RouteEvidenceMatcher {
         var headings: [(distance: Double, heading: Double)] = []
         for distance in stride(from: step, through: max(step, routeLength - step), by: step) {
             guard distance < routeLength,
-                  let before = route.position(at: max(0, distance - step), graph: graph),
-                  let after = route.position(at: min(routeLength, distance + step), graph: graph) else {
+                  let before = index.position(at: max(0, distance - step)),
+                  let after = index.position(at: min(routeLength, distance + step)) else {
                 continue
             }
             let vector = graph.coordinate(after).metres - graph.coordinate(before).metres

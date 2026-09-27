@@ -151,7 +151,7 @@ struct TurnLandmark {
     let outgoingPath: Int
     let incomingDistance: Double
     let outgoingDistance: Double
-    var route: SelectedRoute? = nil
+    var route: RouteIndex? = nil
     var routeAnchorDistance: Double? = nil
 
     static func candidates(graph: RoadGraph, start: RoadPosition, endPath: Int,
@@ -207,7 +207,7 @@ struct TurnLandmark {
 
     func offset(of position: RoadPosition, graph: RoadGraph) -> Double? {
         if let route, let routeAnchorDistance {
-            guard let offset = route.offset(of: position, graph: graph) else {
+            guard let offset = route.offset(of: position) else {
                 return nil
             }
             return offset - routeAnchorDistance
@@ -225,7 +225,7 @@ struct TurnLandmark {
 
     func position(at offset: Double, graph: RoadGraph) -> RoadPosition? {
         if let route, let routeAnchorDistance {
-            return route.position(at: routeAnchorDistance + offset, graph: graph)
+            return route.position(at: routeAnchorDistance + offset)
         }
         if offset >= 0 {
             let distance = outgoingDistance + offset
