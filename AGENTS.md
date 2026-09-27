@@ -4,7 +4,7 @@ These instructions are for AI coding agents (Claude Code, Codex, Cursor, Copilot
 
 ## What this is
 
-An iPhone app that tracks a car along a chosen route without GPS. Speed comes from the road-bump echo between the front and rear axles (`VehicleSpeedObserver`); position comes from a road-constrained particle filter (`TrackingEngine`) corrected by matching measured turns against the route (`RouteEvidenceMatcher`). Maps, routing and search are offline. See README.md for the full design and its measured limits.
+An iPhone app that tracks a car along a chosen route without GPS. Speed comes from the road-bump echo between the front and rear axles (`VehicleSpeedObserver`); position comes from a road-constrained particle filter (`TrackingEngine`) corrected by matching measured turns against the route (`RouteEvidenceMatcher`). Maps, routing and search are offline. See docs/TECHNICAL.md for the full design and its measured limits.
 
 ## Layout
 
@@ -32,7 +32,7 @@ Device builds need the user's own `Config/Local.xcconfig`; never write a team ID
 ## Invariants — do not break
 
 - **No GPS in positioning.** GPS reference rows and the background location session are never inputs to `TrackingEngine`, replay, calibration or wheelbase learning.
-- **Recordings stay readable.** Recording formats 2–4 must still replay. Add fields as optional; bump `TrackingEngine.version` when estimator behaviour changes, and document the change in README.md.
+- **Recordings stay readable.** Recording formats 2–4 must still replay. Add fields as optional; bump `TrackingEngine.version` when estimator behaviour changes, and document the change in docs/TECHNICAL.md and CHANGELOG.md.
 - **Deterministic Core.** The engine uses seeded randomness and sensor time only. Tests are deterministic; no wall-clock time, network or UIKit in `Core/`.
 - **Offline first.** Everything except satellite imagery and Apple Maps search works without a network.
 - **Map identity.** Regenerating map data changes its hash, and recordings only replay against the map they were made with. Do not regenerate data as a side effect of another change.

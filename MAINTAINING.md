@@ -16,6 +16,10 @@ Create `Config/private-patterns.txt` with one regular expression per line for ev
 
 The hooks run the privacy check automatically: quickly on every commit, and fully (including locations) before every push. Keep your own recordings under `build/`, which is ignored; the full check reads them to spot coordinates or road IDs near where you actually drive.
 
+## README style
+
+Keep README.md short: what it is, the main features in a line each, limitations, quick start, links. Explanations of how things work and measured results belong in docs/TECHNICAL.md; control-by-control usage in docs/USER_GUIDE.md.
+
 ## Every change
 
 1. Make the change; keep `project.yml` and the generated Xcode project in sync (`xcodegen generate`).
@@ -26,13 +30,13 @@ The hooks run the privacy check automatically: quickly on every commit, and full
 
 | When you change | Also update |
 | --- | --- |
-| Estimator behaviour (`Core/`) | `TrackingEngine.version`; README "Positioning engine" with replay evidence, worded without places, dates or times; CHANGELOG |
-| App features or controls | README "Quick start" and "First drive"; CHANGELOG; AGENTS.md if commands or layout change |
-| Recording format | README "Recordings and replay" table; keep older formats readable; CHANGELOG |
-| Map data rebuild | `DATA-LICENSE.md` snapshot table, README "Offline data" counts, manifests; keep every file under GitHub's 100 MB limit (`lviv-graph.json` is about 95 MB, so a larger area needs splitting or release downloads) |
+| Estimator behaviour (`Core/`) | `TrackingEngine.version`; docs/TECHNICAL.md "Positioning engine" with replay evidence, worded without places, dates or times; README features or limitations if they change; CHANGELOG |
+| App features or controls | README "Features" and "Quick start" (brief), docs/USER_GUIDE.md (detail); CHANGELOG; AGENTS.md if commands or layout change |
+| Recording format | docs/TECHNICAL.md "Recordings and replay" table; keep older formats readable; CHANGELOG |
+| Map data rebuild | `DATA-LICENSE.md` snapshot table, docs/TECHNICAL.md "Offline data" counts, README features if coverage changes, manifests; keep every file under GitHub's 100 MB limit (`lviv-graph.json` is about 95 MB, so a larger area needs splitting or release downloads) |
 | Dependencies, fonts, bundled assets | `THIRD_PARTY_NOTICES.md`, bundled licence files |
 | Build settings, tool versions, signing | `project.yml`, `Config/Signing.xcconfig`, README "Prerequisites" |
-| Privacy-relevant behaviour (what is recorded, exported or sent) | README "Privacy", issue template, CONTRIBUTING |
+| Privacy-relevant behaviour (what is recorded, exported or sent) | README "Privacy", docs/USER_GUIDE.md, issue template, CONTRIBUTING |
 | Commands, invariants, repository layout | AGENTS.md |
 
 ## Releases
