@@ -15,9 +15,43 @@ struct TurnMotionHistory {
     mutating func append(_ sample: MotionSample, duration: Double) {
         intervals.append(Interval(start: sample.time - duration, end: sample.time,
                                   acceleration: clamp(sample.forwardAcceleration, -10, 7), yaw: sample.yawRate))
-        intervals.removeAll { interval in
-            return interval.end < sample.time - 60
+        if let first = intervals.first, first.end < sample.time - Self.retention {
+            intervals.removeAll { interval in
+                return interval.end < sample.time - Self.retention
+            }
         }
+    }
+
+    /// Long sweeping bends took up to 75 s to drive on field drives; route
+    /// evidence compares their whole heading profile.
+    static let retention = 150.0
+
+    var earliestTime: Double? {
+        return intervals.first?.start
+    }
+
+    /// Yaw integrated from the start of the history to each of `times`,
+    /// which must be ascending and inside the history.
+    func integratedYaw(at times: [Double]) -> [Double]? {
+        guard let first = intervals.first, let time = times.first, time >= first.start else {
+            return nil
+        }
+        var result: [Double] = []
+        result.reserveCapacity(times.count)
+        var accumulated = 0.0
+        var index = 0
+        for time in times {
+            while index < intervals.count && intervals[index].end <= time {
+                accumulated += intervals[index].yaw * (intervals[index].end - intervals[index].start)
+                index += 1
+            }
+            var value = accumulated
+            if index < intervals.count && time > intervals[index].start {
+                value += intervals[index].yaw * (time - intervals[index].start)
+            }
+            result.append(value)
+        }
+        return result
     }
 
     /// Time at which the yaw integral over [start, end] reaches half its total.

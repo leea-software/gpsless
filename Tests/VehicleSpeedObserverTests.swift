@@ -67,6 +67,43 @@ final class VehicleSpeedObserverTests: XCTestCase {
         }
     }
 
+    /// At 120 km/h the echo delay of a 2.7 m wheelbase is 81 ms, below the
+    /// former 0.1 s limit that held measured speed near 97 km/h.
+    func testAxleEchoMeasuresHighwaySpeed() throws {
+        let processor = VehicleMotionProcessor(wheelbase: 2.7)
+        var road = SyntheticRoadVibration(wheelbase: 2.7, length: 5000)
+        let target = 120 / 3.6
+        var speed = 0.0
+        var cruise: [VibrationSpeedObservation] = []
+        for tick in 0...9000 {
+            let time = Double(tick) * 0.01
+            var acceleration = 0.0
+            if time > 5 && speed < target {
+                acceleration = 2.5
+            }
+            speed += acceleration * 0.01
+            road.advance(speed: speed, duration: 0.01)
+            let vibration = road.sample()
+            var total = gravity + SIMD3(0, 0, acceleration / 9.80665) + vibration.acceleration
+            if time > 5 {
+                total.z += 0.08 / 9.80665
+            }
+            let update = processor.receive(raw(time: time, total: total, rotation: vibration.rotation))
+            XCTAssertNil(update.failure)
+            if let observation = update.speedObservation, time > 60 {
+                cruise.append(observation)
+            }
+        }
+        XCTAssertGreaterThan(cruise.count, 50)
+        let mean = cruise.reduce(0) { total, observation in
+            return total + observation.speed
+        } / Double(cruise.count)
+        XCTAssertEqual(mean, target, accuracy: 1)
+        for observation in cruise {
+            XCTAssertEqual(observation.speed, target, accuracy: 2.5)
+        }
+    }
+
     func testIdleVibrationIsObservedAsParked() throws {
         let processor = VehicleMotionProcessor()
         var road = SyntheticRoadVibration()

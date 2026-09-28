@@ -201,6 +201,10 @@ def build(region, output, sources=None, inside=None):
         station["c"] = nearest_settlement(station["y"], station["x"])
     entries = (sorted(place_list, key=lambda entry: (entry["r"], entry["n"])) + sorted(fuel, key=lambda entry: (entry["n"], entry["c"]))
                + sorted(streets, key=lambda entry: (entry["n"], entry["c"])))
+    # Latin context so "shevchenka slavske" finds the street in Славсько.
+    for entry in entries:
+        if entry["c"]:
+            entry["cl"] = transliterate(entry["c"])
     write_json(output / f"{region}-search.json", {"region": region, "snapshot": graph["generated"], "entries": entries})
     print(json.dumps({"region": region, "places": len(place_list), "fuel": len(fuel), "streets": len(streets),
                       "settlements": len(settlements), "bytes": (output / f"{region}-search.json").stat().st_size}))

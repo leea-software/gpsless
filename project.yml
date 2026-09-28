@@ -42,8 +42,13 @@ targets:
           - UIInterfaceOrientationPortrait
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER).place
+            CFBundleURLSchemes: [gpsless]
+        LSApplicationQueriesSchemes: [comgooglemaps]
     dependencies:
       - package: MapLibre
+      - target: GPSLessShare
     postBuildScripts:
       - name: Record build identity
         script: /bin/bash "$SRCROOT/tools/write_build_identity.sh"
@@ -52,9 +57,37 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(GPSLESS_BUNDLE_IDENTIFIER)
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "0.3.2"
-        CURRENT_PROJECT_VERSION: 22
+        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: 26
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  GPSLessShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+        excludes:
+          - Info.plist
+      - path: Core/MapLink.swift
+      - path: GPSLess/Shared/SharedPlaceResolver.swift
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: GPSLess
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(GPSLESS_BUNDLE_IDENTIFIER).share
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: 26
   GPSLessServiceTests:
     type: bundle.unit-test
     platform: iOS

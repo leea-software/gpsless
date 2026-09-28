@@ -9,6 +9,8 @@ public struct SearchEntry: Codable, Sendable, Equatable {
     public let y: Double
     public let x: Double
     public let r: Int
+    /// Latin form of the context, in indexes built since fuel stations were added.
+    public let cl: String?
 
     public var name: String { n }
     public var kind: String { k }
@@ -105,7 +107,7 @@ public struct PlaceSearch: Sendable {
             return Self.words(([entry.n] + entry.l).joined(separator: " "))
         })
         contextIndex = WordIndex(entries.map { entry in
-            return Self.words(entry.c)
+            return Self.words(entry.c + " " + (entry.cl ?? ""))
         })
         firstNameWords = entries.map { entry in
             return Array(Self.words(entry.n).first ?? "")

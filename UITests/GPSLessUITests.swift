@@ -5,8 +5,10 @@ final class GPSLessUITests: XCTestCase {
         let confirm = app.buttons["confirmStartingPoint"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 40))
         confirm.tap()
+        // Khreshchatyk, reachable from the default start direction; the map
+        // fills the screen behind the cards.
         let map = app.otherElements["offlineMap"]
-        map.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.30)).tap()
+        map.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.30)).tap()
         XCTAssertTrue(app.buttons["startTracking"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["startTracking"].isEnabled)
     }
@@ -55,7 +57,9 @@ final class GPSLessUITests: XCTestCase {
         add(screenshot)
         app.buttons["resetEverything"].tap()
         XCTAssertFalse(start.exists)
-        XCTAssertTrue(app.buttons["confirmStartingPoint"].exists)
+        // Start over clears the starting point as well and asks for it again.
+        let request = app.descendants(matching: .any).matching(identifier: "startingPointRequest").firstMatch
+        XCTAssertTrue(request.waitForExistence(timeout: 5))
         let resetScreenshot = XCTAttachment(screenshot: app.screenshot())
         resetScreenshot.name = "Reset clears route and destination"
         resetScreenshot.lifetime = .keepAlways

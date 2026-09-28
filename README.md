@@ -12,6 +12,7 @@ An iPhone app that follows your car along a route **without GPS** — for places
 - **Offline maps** of Kyiv and the Lviv region, including unpaved Carpathian tracks, with places, peaks, stations, fuel, shops, food, landmarks and speed cameras labelled.
 - **Corridor maps** for long journeys across oblasts, built on your Mac from OpenStreetMap along your route and kept private.
 - **Offline search** for villages, towns, districts, streets and fuel stations, in Ukrainian or Latin letters; Apple Maps search when viewing satellite imagery.
+- **Google Maps hand-off:** find a place in Google Maps and share it to GPSLess, or paste its link or coordinates, to set point A or B exactly.
 - **Offline routing** with up to three alternatives (fastest, shortest and a distinct one) and route changes while paused.
 - **Satellite view** to find your exact starting point.
 - **Keeps running** in the background and with the screen locked.
@@ -41,12 +42,12 @@ An iPhone app that follows your car along a route **without GPS** — for places
 
 ### Use
 
-1. Choose the map under **More → Map region** (Kyiv or Lviv region).
-2. While parked, tap your road on the map, or find it with the magnifier; the globe button switches to satellite imagery, which helps to spot exactly where you are. Drag the marker to your position, use **Flip direction** until the arrow points the way the car faces, and press **Confirm**.
+1. Choose the map on the first card (**Map**: Kyiv, Lviv region or a corridor map you built).
+2. While parked, tap your road on the map, or search for it; the globe button switches to satellite imagery, which helps to spot exactly where you are. Drag the marker to your position, use **Flip** until the arrow points the way the car faces, and press **Set as start**.
 3. Tap or search destination B and choose one of the offered routes.
-4. Once, set **Car wheelbase** from your car's specifications (mount sheet or **Sensor details → Vehicle**); the app refines it from turns afterwards.
-5. Mount the phone upright with the screen facing back, press **Start** → **Car stopped & phone mounted**, keep still for four seconds and drive. Allow Location when asked so tracking continues in other apps and with the screen locked (the location itself is discarded).
-6. Follow the chosen route. Press **I need the phone** before taking it out of the mount. Recordings stay on the phone; **More → Recorded drives** exports them.
+4. Once, set the **Wheelbase** from your car's specifications (in the start sheet or **Settings → Car**); the app refines it from turns afterwards.
+5. Mount the phone upright with the screen facing back, press **Start drive**, check the three points and press **Start drive** again, keep still for four seconds and drive. Allow Location when asked so tracking continues in other apps and with the screen locked (the location itself is discarded).
+6. Follow the chosen route. Press **Pause** before taking the phone out of the mount. Recordings stay on the phone; **Settings → Recorded drives** exports them.
 
 The [user guide](docs/USER_GUIDE.md) explains each control in detail.
 
@@ -58,7 +59,7 @@ The [user guide](docs/USER_GUIDE.md) explains each control in detail.
 
 ## Privacy
 
-Nothing leaves the phone unless you export it. Location permission only keeps a drive running in the background (the location itself is discarded) and, if you turn it on, records the GPS reference trace. Recordings contain your routes and times, so **never attach recordings or screenshots of personal places to a public issue**; the issue template asks for what is needed instead.
+Nothing leaves the phone unless you export it, search Apple Maps over the satellite view (the typed text), or hand over a short Google Maps link (the link is opened once to find its place). Location permission only keeps a drive running in the background (the location itself is discarded) and, if you turn it on, records the GPS reference trace. Recordings contain your routes and times, so **never attach recordings or screenshots of personal places to a public issue**; the issue template asks for what is needed instead.
 
 ## Licence
 

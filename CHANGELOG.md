@@ -2,6 +2,14 @@
 
 Engine versions are recorded in every drive recording (`engineVersion`).
 
+## 0.4.0 (build 26)
+
+- Engine 3.3 `3.3.0-highway-echo`: road-bump speed works above 100 km/h. The axle echo is used down to 0.06 s delay and measured at 2.5 ms steps; above 90 km/h, where the echo weakens and repeating wheel and drivetrain vibration mimics it, its weight falls so a false echo cannot drag the speed down (on a highway drive the worst tenth of readings above 105 km/h was 65–80 km/h too low; now 9–15 km/h). A match that would move the car far outside its uncertainty now waits for a second turn unless the alternatives are clearly excluded. A U-turn where the route itself turns round no longer stops tracking when it is driven differently from the mapped turnaround.
+- Engine 3.2 `3.2.0-heading-profile`: turns are matched by their heading profile against distance, so long sweeping bends and S-bends correct the position; turns from 15° count; the uncertainty shrinks after a confident match instead of only growing.
+- Redesigned driving screen: map-first layout, compact route and tracking cards, a Settings screen and a drives list.
+- Search takes Latin letters for Ukrainian names, and warns when a chosen point has no mapped road nearby or no legal route from the chosen direction.
+- Google Maps hand-off: open the same search in Google Maps, then share the place to GPSLess or paste its link or coordinates to set point A or B. Google, Apple Maps and OpenStreetMap links, geo: URIs and plain or degree coordinates are read offline; short links are followed online.
+
 ## 0.3.2 (build 22)
 
 - Corridor maps for long journeys across several oblasts: `tools/build_corridor.py` keeps full detail along a route and whole areas you name; the app offers them next to the bundled maps. They are built on your Mac and kept out of Git.

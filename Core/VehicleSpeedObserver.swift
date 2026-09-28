@@ -98,6 +98,13 @@ final class AxleEchoAnalyzer {
     static let window = 400
     static let transformSize = 1024
     static let maximumLag = 250
+    /// Correlation values per 10 ms lag step. At highway speed the echo delay
+    /// is 7–10 samples, so one sample is 10–14% of speed; linear
+    /// interpolation between samples of a 40 Hz band-limited peak sampled at
+    /// 100 Hz flattens it, so the correlation is evaluated band-limited at
+    /// 2.5 ms steps instead.
+    static let lagResolution = 4
+    static let fineTransformSize = transformSize * lagResolution
     static let rollingWindow = 100
     static let rollingTransformSize = 128
     static let whitening = 0.8
@@ -124,6 +131,7 @@ final class AxleEchoAnalyzer {
     private var previousTime = 0.0
     private var previousValues = [Double](repeating: 0, count: 7)
     private let transform = RadixTwoFFT(size: AxleEchoAnalyzer.transformSize)
+    private let fineTransform = RadixTwoFFT(size: AxleEchoAnalyzer.fineTransformSize)
     private let rollingTransform = RadixTwoFFT(size: AxleEchoAnalyzer.rollingTransformSize)
     private let echoWindow: [Double]
     private let rollingWindowShape: [Double]
@@ -190,7 +198,8 @@ final class AxleEchoAnalyzer {
         return result
     }
 
-    /// Weighted whitened correlation over lags 0..<maximumLag at 10 ms steps.
+    /// Weighted whitened correlation over lags 0..<maximumLag, with
+    /// `lagResolution` values per 10 ms step.
     func correlation() -> [Double]? {
         guard count >= Self.window else {
             return nil
@@ -251,14 +260,15 @@ final class AxleEchoAnalyzer {
         }
         // Hermitian inverse: x[n] = 2·Σ Re(A_k e^{+2πikn/N}) over the band.
         // Conjugate, forward-transform, conjugate again yields the inverse.
-        var real = [Double](repeating: 0, count: Self.transformSize)
-        var imaginary = [Double](repeating: 0, count: Self.transformSize)
+        // The same bins in an R-times longer transform give x at n/R.
+        var real = [Double](repeating: 0, count: Self.fineTransformSize)
+        var imaginary = [Double](repeating: 0, count: Self.fineTransformSize)
         for bin in band {
             real[bin] = combinedReal[bin] / weightSum
             imaginary[bin] = -combinedImaginary[bin] / weightSum
         }
-        transform.forward(&real, &imaginary)
-        return (0..<Self.maximumLag).map { lag in
+        fineTransform.forward(&real, &imaginary)
+        return (0..<(Self.maximumLag * Self.lagResolution)).map { lag in
             return 2 * real[lag]
         }
     }
@@ -295,7 +305,22 @@ final class AxleEchoAnalyzer {
 
 /// Discrete Bayes filter over forward speed and residual acceleration bias.
 final class SpeedGridFilter {
-    static let speeds = (0...180).map { Double($0) * 0.2 }
+    /// 0–40 m/s (144 km/h). On a highway drive a 45 m/s grid let a false
+    /// echo 1.4 times the true speed hold 158 km/h at 113 km/h for a minute.
+    static let speeds = (0...200).map { Double($0) * 0.2 }
+    /// Shortest usable axle delay. The former 0.1 s (101 km/h with a 2.82 m
+    /// wheelbase) pulled faster driving towards that speed: on a highway drive
+    /// vibration speed read 14 km/h low at 105–115 km/h and 45 km/h low above,
+    /// although the echo stayed at its expected delay up to 125 km/h and
+    /// correlation noise at 60–90 ms was within 25% of that at 100–150 ms.
+    static let minimumEchoDelay = 0.06
+    /// Above 90 km/h the echo weakened (median peak 2.2σ at 105–115 km/h
+    /// against 3.5σ in town) while repeating vibration kept false peaks near
+    /// 0.67 and 1.35 times the speed at 3.5σ. Evidence weight falls to this
+    /// share by 115 km/h, for every hypothesis alike, so the filter leans on
+    /// integrated acceleration instead of jumping between peaks.
+    static let highwayEchoShare = 0.45
+    static let highwayEchoSpeeds = 25.0...32.0
     static let biases = (0...40).map { Double($0 - 20) * 0.04 }
     static let hop = 0.5
     static let movingFloor = 0.1
@@ -325,11 +350,13 @@ final class SpeedGridFilter {
         var fractions: [Double] = []
         var supported: [Bool] = []
         let maximumLag = Double(AxleEchoAnalyzer.maximumLag)
+        let resolution = Double(AxleEchoAnalyzer.lagResolution)
         for speed in Self.speeds {
-            let lag = clamp(wheelbase / max(speed, 1e-3) * AxleEchoAnalyzer.sampleRate, 0, maximumLag - 2)
+            let lag = clamp(wheelbase / max(speed, 1e-3) * AxleEchoAnalyzer.sampleRate * resolution, 0, maximumLag * resolution - 2)
             indices.append(Int(lag))
             fractions.append(lag - Double(Int(lag)))
-            supported.append(speed >= wheelbase / (maximumLag / AxleEchoAnalyzer.sampleRate - 0.05) && speed <= wheelbase / 0.1)
+            supported.append(speed >= wheelbase / (maximumLag / AxleEchoAnalyzer.sampleRate - 0.05)
+                             && speed <= wheelbase / Self.minimumEchoDelay)
         }
         lagIndex = indices
         lagFraction = fractions
@@ -429,7 +456,8 @@ final class SpeedGridFilter {
                 let residual = zip(correlation, background).map { value, reference in
                     return value - reference
                 }
-                let tail = residual[10...]
+                let gain = echoGain * highwayEchoScale(next)
+                let tail = residual[(10 * AxleEchoAnalyzer.lagResolution)...]
                 let mean = tail.reduce(0, +) / Double(tail.count)
                 let noise = sqrt(tail.reduce(0) { total, value in
                     return total + (value - mean) * (value - mean)
@@ -439,7 +467,7 @@ final class SpeedGridFilter {
                 var peak = -Double.infinity
                 for row in 0..<speedCount {
                     let value = (1 - lagFraction[row]) * residual[lagIndex[row]] + lagFraction[row] * residual[lagIndex[row] + 1]
-                    scores[row] = clamp(echoGain * value / noise, -20, 20)
+                    scores[row] = clamp(gain * value / noise, -20, 20)
                     if echoSupported[row] {
                         supportedScores.append(scores[row])
                         peak = max(peak, value / noise)
@@ -513,6 +541,22 @@ final class SpeedGridFilter {
         }
         return Posterior(speed: mean, uncertainty: sqrt(max(0, square - mean * mean)), stoppedProbability: stopped,
                          bias: bias, echoStrength: echoStrength, movingProbability: movingProbability)
+    }
+
+    /// Echo weight for the predicted mean speed.
+    private func highwayEchoScale(_ predicted: [Double]) -> Double {
+        var total = 0.0
+        var mean = 0.0
+        for row in 0..<speedCount {
+            for column in 0..<biasCount {
+                total += predicted[row * biasCount + column]
+                mean += predicted[row * biasCount + column] * Self.speeds[row]
+            }
+        }
+        let speed = total > 0 ? mean / total : 0
+        let range = Self.highwayEchoSpeeds
+        let fraction = clamp((speed - range.lowerBound) / (range.upperBound - range.lowerBound), 0, 1)
+        return 1 - fraction * (1 - Self.highwayEchoShare)
     }
 
     private func normalize() {

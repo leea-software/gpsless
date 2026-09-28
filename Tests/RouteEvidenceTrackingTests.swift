@@ -1,8 +1,9 @@
 import XCTest
 @testable import GPSLessCore
 
-/// Engine 3.1: turn sequences on curvy routes, holding the estimate before a
-/// bend the car has not turned into, and counting road-bump speed corrections.
+/// Engine 3.1–3.2: turn sequences on curvy routes, heading profiles of long
+/// bends, holding the estimate before a bend the car has not turned into, and
+/// counting road-bump speed corrections.
 final class RouteEvidenceTrackingTests: XCTestCase {
     override func tearDown() {
         MapProjection.current = .kyiv
@@ -66,7 +67,48 @@ final class RouteEvidenceTrackingTests: XCTestCase {
         let fourth = decisions[3]
         XCTAssertEqual(fourth.feature?.index, try feature(near: vertices[3]).index)
         XCTAssertEqual(try XCTUnwrap(fourth.anchorRouteOffset), vertices[3] + 10, accuracy: 15)
-        XCTAssertLessThan(try XCTUnwrap(fourth.mixtureSigma), 40)
+        // A few percent of far alternatives remain; 95% of the weight is close.
+        XCTAssertLessThan(try XCTUnwrap(fourth.credibleRadius), 40)
+    }
+
+    /// A 100° sweeping bend drawn over 700 m, like the Lviv ring road. No
+    /// single turn feature describes it, but its heading profile does: with
+    /// the estimate 200 m past the bend the matched profile moves the car
+    /// back to within 25 m, and the reported radius ignores the few percent
+    /// of far-away fallback weight.
+    func testSweepingBendProfileMovesEstimateBackToTheBend() throws {
+        let bendStart = 1000.0
+        let bendLength = 700.0
+        let bendAngle = -100.0 * .pi / 180
+        func heading(at offset: Double) -> Double {
+            return bendAngle * clamp((offset - bendStart) / bendLength, 0, 1)
+        }
+        var points = [Vector2(0, 0)]
+        var offset = 0.0
+        while offset < 2500 {
+            let step = offset >= bendStart && offset < bendStart + bendLength ? 25.0 : 250.0
+            let direction = heading(at: offset + step / 2)
+            points.append(points[points.count - 1] + Vector2(sin(direction), cos(direction)) * step)
+            offset += step
+        }
+        let graph = try dataset([(1, 2, points)])
+        let route = SelectedRoute(start: RoadPosition(edge: 0, distance: 0),
+                                  destination: RoadPosition(edge: 0, distance: 2400), edges: [0])
+        let matcher = RouteEvidenceMatcher(route: route, graph: graph)
+        matcher.start(at: 0)
+        let now = bendStart + bendLength + 60
+        let span = now - bendStart + 40
+        let distances = stride(from: span, through: 0, by: -10).map { $0 }
+        let profile = ObservedHeadingProfile(distances: distances, headings: distances.map { distance in
+            return heading(at: now - distance) + 0.3
+        }, sinceStart: now - bendStart, sinceMidpoint: now - bendStart - bendLength / 2, sinceEnd: now - bendStart - bendLength)
+        let turn = TurnObservation(id: 1, start: 60, end: 100, startPosition: route.start,
+                                   startMapHeading: 0, angle: bendAngle, startUncertainty: 150)
+        let decision = matcher.match(turn: turn, time: 104, estimatedRouteOffset: now + 200, uncertainty: 300,
+                                     estimatedSpeed: 17, profile: profile)
+        XCTAssertNotNil(decision.feature, decision.reason)
+        XCTAssertEqual(try XCTUnwrap(decision.anchorRouteOffset), now, accuracy: 25)
+        XCTAssertLessThan(try XCTUnwrap(decision.credibleRadius), 80)
     }
 
     private func junctionRoute() throws -> (RoadGraph, SelectedRoute) {

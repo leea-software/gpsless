@@ -213,7 +213,7 @@ struct TurnObservation {
 
 /// A bounded road-constrained particle filter. No location or network inputs exist.
 public final class TrackingEngine {
-    static let version = "3.1.1-route-sequence"
+    static let version = "3.3.0-highway-echo"
     public let graph: RoadGraph
     public private(set) var estimate: TrackingEstimate?
     /// Speed corrections from road bumps since start, counted once per
@@ -286,8 +286,8 @@ public final class TrackingEngine {
     private var lastRouteEvidenceEnd: Double?
     private var lastRouteEvidenceTurnEndTime: Double?
     private var routeEvidenceUncertainty: Double?
-    /// Published travelled distance for about a minute, to measure distance
-    /// driven since a turn's angular midpoint.
+    /// Published travelled distance for as long as the turn motion history,
+    /// to measure distance driven since a turn and sample its heading profile.
     private var travelHistory: [(time: Double, distance: Double)] = []
     private var bendHoldTravel = 0.0
     private var bendGateReleaseRemaining = 0.0
@@ -798,7 +798,9 @@ public final class TrackingEngine {
                         rewind = candidate
                         after = path.position(at: currentDistance - rewind)
                         totalDistance = max(onset.travelled, totalDistance - rewind)
-                        if landmarkUncertainty != nil {
+                        // As in publish: with measured speed the growth is
+                        // added on top of the floor, so fold in only the rest.
+                        if landmarkUncertainty != nil && vibrationMeasuredTime == 0 {
                             initialUncertainty = max(initialUncertainty, estimate.uncertainty)
                         } else {
                             initialUncertainty = max(initialUncertainty, estimate.uncertainty - motionUncertaintyGrowth())
@@ -1474,7 +1476,7 @@ public final class TrackingEngine {
         totalDistance = advancedDistance
         travelHistory.append((sample.time, totalDistance))
         travelHistory.removeAll { point in
-            return sample.time - point.time > 70
+            return sample.time - point.time > TurnMotionHistory.retention
         }
         if angleMatched || landmarkCorrection != nil {
             anchors += 1
@@ -1821,12 +1823,15 @@ public final class TrackingEngine {
         if let last = travelHistory.last {
             odometer = last.distance + max(0, speed) * max(0, time - last.time)
         }
+        let sinceMidpoint = midpointTime.map { midpoint in
+            return distanceTravelled(since: midpoint, now: time, speed: speed)
+        }
+        let sinceEnd = distanceTravelled(since: turn.end, now: time, speed: speed)
         let decision = matcher.match(turn: turn, time: time, estimatedRouteOffset: offsetBefore,
                                      uncertainty: uncertainty, estimatedSpeed: speed, odometer: odometer,
-                                     distanceSinceMidpoint: midpointTime.map { midpoint in
-                                         return distanceTravelled(since: midpoint, now: time, speed: speed)
-                                     },
-                                     distanceSinceEnd: distanceTravelled(since: turn.end, now: time, speed: speed))
+                                     distanceSinceMidpoint: sinceMidpoint, distanceSinceEnd: sinceEnd,
+                                     profile: observedHeadingProfile(turn: turn, now: time, speed: speed,
+                                                                     sinceMidpoint: sinceMidpoint, sinceEnd: sinceEnd))
         guard let feature = decision.feature, let targetEstimate = decision.anchorRouteOffset,
               let anchorSigma = decision.anchorSigma else {
             routeEvidenceEvents.append(RouteEvidenceEvent(time: time, signalID: turn.id, stage: "ambiguous",
@@ -1839,7 +1844,11 @@ public final class TrackingEngine {
                                                            confidence: decision.confidence,
                                                            runnerUpConfidence: decision.runnerUpConfidence,
                                                            precedingStraightSeconds: decision.precedingStraightSeconds,
-                                                           precedingStraightMetres: nil))
+                                                           precedingStraightMetres: nil,
+                                                           profileResidualDegrees: decision.profileResidual.map { residual in
+                                                               return residual * 180 / .pi
+                                                           },
+                                                           profileLengthMetres: decision.profileLength))
             trimRouteEvidenceEvents()
             if abs(angleDifference(turn.angle, 0)) >= 150 * .pi / 180 {
                 _ = freeze("Observed U-turn leaves the selected route · reset starting point", code: .headingMismatch,
@@ -1853,14 +1862,47 @@ public final class TrackingEngine {
         // earlier matched sequence and the odometer since then.
         let anchorName = decision.anchor ?? "end"
         let sigma = max(4, anchorSigma)
-        if let midpoint = midpointTime {
+        let targetOffset = clamp(targetEstimate, 0, routeLength)
+        let priorVariance = pow(max(4, uncertainty / 2), 2)
+        let anchorVariance = sigma * sigma
+        let distant = abs(targetOffset - offsetBefore) > 4 * sqrt(priorVariance + anchorVariance)
+        // A match far outside the estimate's own uncertainty moves the car
+        // only when the matcher's 95% region leaves the current position out.
+        // On a highway drive one 47° turn after 11 minutes without a match
+        // fitted a bend 10 km back with 90% of the weight, the rest staying
+        // at the (correct) estimate; the next turn decides instead.
+        if distant, let radius = decision.credibleRadius, radius > 0.5 * abs(targetOffset - offsetBefore) {
+            routeEvidenceEvents.append(RouteEvidenceEvent(time: time, signalID: turn.id, stage: "ambiguous",
+                                                           reason: "Distant match not separated from the current position",
+                                                           observedTurnDegrees: turn.angle * 180 / .pi,
+                                                           matchedFeatureIndex: feature.index,
+                                                           matchedTurnDegrees: feature.angle * 180 / .pi,
+                                                           matchedRouteOffsetMetres: feature.midpoint,
+                                                           angleResidualDegrees: angleDifference(turn.angle, feature.angle) * 180 / .pi,
+                                                           routeOffsetBeforeMetres: offsetBefore,
+                                                           routeOffsetAfterMetres: nil,
+                                                           confidence: decision.confidence,
+                                                           runnerUpConfidence: decision.runnerUpConfidence,
+                                                           precedingStraightSeconds: decision.precedingStraightSeconds,
+                                                           precedingStraightMetres: nil,
+                                                           anchorRouteOffsetMetres: targetOffset,
+                                                           anchorSigmaMetres: sigma,
+                                                           anchor: anchorName,
+                                                           credibleRadiusMetres: radius,
+                                                           profileResidualDegrees: decision.profileResidual.map { residual in
+                                                               return residual * 180 / .pi
+                                                           },
+                                                           profileLengthMetres: decision.profileLength))
+            trimRouteEvidenceEvents()
+            return
+        }
+        if let midpoint = midpointTime, feature.index >= 0 {
             // Midpoints matched the map within about 5 m for ordinary turns and
             // 44 m for one U-turn loop, tighter than the position-fusion sigma.
             let length = feature.end - feature.start
             let calibrationSigma = abs(feature.angle) > 150 * .pi / 180 ? max(10, 0.25 * length) : max(5, 0.1 * length)
             wheelbaseCalibrator.anchor(time: midpoint, routeOffset: feature.midpoint, sigma: calibrationSigma, now: time)
         }
-        let targetOffset = clamp(targetEstimate, 0, routeLength)
         var routeAverageSpeed: Double?
         var speedAfter = speed
         // The interval average includes any stop between the turns. Measured
@@ -1890,32 +1932,41 @@ public final class TrackingEngine {
         // hypotheses are clustered more tightly than their real error, so
         // reweighting them cannot move the estimate. An estimate inconsistent
         // with its own uncertainty (the old speed drift) takes the anchor fully.
-        let priorVariance = pow(max(4, uncertainty / 2), 2)
-        let anchorVariance = sigma * sigma
         var gain = priorVariance / (priorVariance + anchorVariance)
         var correction = "kalman"
-        if abs(targetOffset - offsetBefore) > 4 * sqrt(priorVariance + anchorVariance) {
+        if distant {
             gain = 1
             correction = "recovery_shift"
         }
         let adjustment = gain * (targetOffset - offsetBefore)
+        // The particles keep their own spread along the route; a confident
+        // anchor narrows it to the anchor's, or the radius would stay wide.
+        var particleVariance = 0.0
+        for particle in particles {
+            if let offset = routeIndex?.offset(of: particle.position) {
+                particleVariance += particle.weight * pow(offset - offsetBefore, 2) / weight
+            }
+        }
+        let contraction = min(1, sigma / max(1e-9, sqrt(particleVariance)))
         for index in particles.indices {
             guard let offset = routeIndex?.offset(of: particles[index].position) else {
                 continue
             }
-            let correctedOffset = clamp(offset + adjustment, 0, routeLength)
+            let correctedOffset = clamp(offsetBefore + (offset - offsetBefore) * contraction + adjustment, 0, routeLength)
             if let corrected = routeIndex?.position(at: correctedOffset) {
                 particles[index].position = corrected
                 particles[index].curvatureReference = nil
             }
         }
         let offsetAfter = clamp(offsetBefore + adjustment, 0, routeLength)
-        // Weaker alternative alignments widen the reported radius.
-        let alternativeVariance = max(0, pow(decision.mixtureSigma ?? sigma, 2) - sigma * sigma)
+        // Weaker alternative alignments widen the reported radius by as much
+        // as they widen the 95% radius; a few percent of far-away
+        // alternatives must not keep a confident fix at hundreds of metres.
+        let alternatives = max(0, (decision.credibleRadius ?? 2 * sigma) - 2 * sigma)
         if gain < 1 {
-            routeEvidenceUncertainty = max(8, 2 * sqrt(priorVariance * anchorVariance / (priorVariance + anchorVariance) + alternativeVariance))
+            routeEvidenceUncertainty = max(8, 2 * sqrt(priorVariance * anchorVariance / (priorVariance + anchorVariance)) + alternatives)
         } else {
-            routeEvidenceUncertainty = max(10, 2 * sqrt(anchorVariance + alternativeVariance))
+            routeEvidenceUncertainty = max(10, 2 * sigma + alternatives)
         }
         pendingRouteFeature = feature
         lastRouteEvidenceEnd = feature.end
@@ -1943,8 +1994,72 @@ public final class TrackingEngine {
                                                        anchorRouteOffsetMetres: targetOffset,
                                                        anchorSigmaMetres: sigma,
                                                        anchor: anchorName,
-                                                       correction: correction))
+                                                       correction: correction,
+                                                       credibleRadiusMetres: decision.credibleRadius,
+                                                       profileResidualDegrees: decision.profileResidual.map { residual in
+                                                           return residual * 180 / .pi
+                                                       },
+                                                       profileLengthMetres: decision.profileLength))
         trimRouteEvidenceEvents()
+    }
+
+    /// The gyro heading against distance driven, from shortly before the
+    /// turn began until now, when the histories reach back that far.
+    private func observedHeadingProfile(turn: TurnObservation, now: Double, speed: Double,
+                                        sinceMidpoint: Double?, sinceEnd: Double) -> ObservedHeadingProfile? {
+        guard let first = travelHistory.first, let last = travelHistory.last,
+              let earliest = turnMotionHistory.earliestTime else {
+            return nil
+        }
+        let distanceNow = last.distance + max(0, speed) * max(0, now - last.time)
+        let sinceStart = distanceTravelled(since: turn.start, now: now, speed: speed)
+        var span = min(RouteEvidenceMatcher.maximumProfileLength, sinceStart + 40, distanceNow - first.distance)
+        // The yaw history must cover the profile's first point too.
+        while span > 20, let start = time(atDistance: distanceNow - span, now: now), start < earliest {
+            span -= 20
+        }
+        guard span >= 20 else {
+            return nil
+        }
+        let count = Int(min(80, max(8, (span / 5).rounded())))
+        let distances = (0...count).map { index in
+            return span * (1 - Double(index) / Double(count))
+        }
+        let times = distances.compactMap { distance in
+            return time(atDistance: distanceNow - distance, now: now)
+        }
+        guard times.count == distances.count, let yaw = turnMotionHistory.integratedYaw(at: times) else {
+            return nil
+        }
+        return ObservedHeadingProfile(distances: distances, headings: yaw, sinceStart: sinceStart,
+                                      sinceMidpoint: sinceMidpoint, sinceEnd: sinceEnd)
+    }
+
+    /// When the published travelled distance first reached `distance`.
+    private func time(atDistance distance: Double, now: Double) -> Double? {
+        guard let first = travelHistory.first, let last = travelHistory.last, distance >= first.distance else {
+            return nil
+        }
+        if distance >= last.distance {
+            return min(now, last.time)
+        }
+        var low = 0
+        var high = travelHistory.count - 1
+        while low < high {
+            let middle = (low + high) / 2
+            if travelHistory[middle].distance >= distance {
+                high = middle
+            } else {
+                low = middle + 1
+            }
+        }
+        guard low > 0 else {
+            return travelHistory[0].time
+        }
+        let before = travelHistory[low - 1]
+        let after = travelHistory[low]
+        let fraction = (distance - before.distance) / max(1e-9, after.distance - before.distance)
+        return before.time + (after.time - before.time) * fraction
     }
 
     /// Published travelled distance since `start`, plus the part since the

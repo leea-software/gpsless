@@ -70,6 +70,9 @@ struct OfflineMapView: UIViewRepresentable {
         }
     }
 
+    /// The chosen route, matching `Theme.route`.
+    static let routeColor = UIColor(red: 0.20, green: 0.78, blue: 1.0, alpha: 1)
+
     static func cameraKey(_ region: MapRegion) -> String {
         return "mapCamera.\(region.id)"
     }
@@ -202,6 +205,28 @@ struct OfflineMapView: UIViewRepresentable {
         private var renderedOptionsKey: String?
         private var renderedSelectedIndex = -1
         private var lastFocusRequest = 0
+        private var lastOverviewRequest = 0
+
+        /// Shows every point inside the part of the map the cards leave free.
+        func frame(_ points: [CLLocationCoordinate2D], on map: MLNMapView, animated: Bool) {
+            guard let first = points.first else {
+                return
+            }
+            var south = first.latitude
+            var north = first.latitude
+            var west = first.longitude
+            var east = first.longitude
+            for point in points {
+                south = min(south, point.latitude)
+                north = max(north, point.latitude)
+                west = min(west, point.longitude)
+                east = max(east, point.longitude)
+            }
+            let bounds = MLNCoordinateBounds(sw: CLLocationCoordinate2D(latitude: south, longitude: west),
+                                             ne: CLLocationCoordinate2D(latitude: north, longitude: east))
+            map.setVisibleCoordinateBounds(bounds, edgePadding: UIEdgeInsets(top: 30, left: 40, bottom: 30, right: 70),
+                                           animated: animated, completionHandler: nil)
+        }
         private var coverageSource: MLNShapeSource?
         private var coverageBounds: [Double]?
 
@@ -239,9 +264,18 @@ struct OfflineMapView: UIViewRepresentable {
             renderedOptionsKey = nil
             let route = MLNShapeSource(identifier: "selected-route", shape: nil, options: nil)
             style.addSource(route)
+            // A dark casing keeps the route readable over busy streets.
+            let casing = MLNLineStyleLayer(identifier: "selected-route-casing", source: route)
+            casing.lineColor = NSExpression(forConstantValue: UIColor(red: 0.02, green: 0.18, blue: 0.26, alpha: 1))
+            casing.lineWidth = NSExpression(forConstantValue: 10)
+            casing.lineCap = NSExpression(forConstantValue: "round")
+            casing.lineJoin = NSExpression(forConstantValue: "round")
+            addBelowLabels(casing, to: style)
             let routeLayer = MLNLineStyleLayer(identifier: "selected-route-line", source: route)
-            routeLayer.lineColor = NSExpression(forConstantValue: UIColor.systemCyan)
+            routeLayer.lineColor = NSExpression(forConstantValue: OfflineMapView.routeColor)
             routeLayer.lineWidth = NSExpression(forConstantValue: 6)
+            routeLayer.lineCap = NSExpression(forConstantValue: "round")
+            routeLayer.lineJoin = NSExpression(forConstantValue: "round")
             addBelowLabels(routeLayer, to: style)
             routeSource = route
             renderedRoute = nil
@@ -265,9 +299,9 @@ struct OfflineMapView: UIViewRepresentable {
             coverageSource = coverage
             coverageBounds = nil
             let coverageLayer = MLNLineStyleLayer(identifier: "coverage-line", source: coverage)
-            coverageLayer.lineColor = NSExpression(forConstantValue: UIColor.systemOrange)
-            coverageLayer.lineWidth = NSExpression(forConstantValue: 2)
-            coverageLayer.lineDashPattern = NSExpression(forConstantValue: [3, 3])
+            coverageLayer.lineColor = NSExpression(forConstantValue: UIColor.systemOrange.withAlphaComponent(0.55))
+            coverageLayer.lineWidth = NSExpression(forConstantValue: 1.5)
+            coverageLayer.lineDashPattern = NSExpression(forConstantValue: [2, 4])
             addBelowLabels(coverageLayer, to: style)
             DispatchQueue.main.async {
                 self.store.mapReady = true
@@ -283,6 +317,10 @@ struct OfflineMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MLNMapView, viewFor annotation: MLNAnnotation) -> MLNAnnotationView? {
+            if annotation === destinationMarker {
+                return mapView.dequeueReusableAnnotationView(withIdentifier: "destination")
+                    ?? DestinationAnnotationView(annotation: annotation, reuseIdentifier: "destination")
+            }
             guard annotation === marker else {
                 return nil
             }
@@ -407,21 +445,8 @@ struct OfflineMapView: UIViewRepresentable {
                             return CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude)
                         }
                     } + points
-                    if fit, let first = framed.first {
-                        let points = framed
-                        var south = first.latitude
-                        var north = first.latitude
-                        var west = first.longitude
-                        var east = first.longitude
-                        for point in points {
-                            south = min(south, point.latitude)
-                            north = max(north, point.latitude)
-                            west = min(west, point.longitude)
-                            east = max(east, point.longitude)
-                        }
-                        let bounds = MLNCoordinateBounds(sw: CLLocationCoordinate2D(latitude: south, longitude: west),
-                                                         ne: CLLocationCoordinate2D(latitude: north, longitude: east))
-                        map.setVisibleCoordinateBounds(bounds, edgePadding: UIEdgeInsets(top: 20, left: 40, bottom: 20, right: 40), animated: false, completionHandler: nil)
+                    if fit {
+                        frame(framed, on: map, animated: false)
                     }
                     let destination = graph.coordinate(route.destination)
                     destinationMarker.coordinate = CLLocationCoordinate2D(latitude: destination.latitude, longitude: destination.longitude)
@@ -452,6 +477,14 @@ struct OfflineMapView: UIViewRepresentable {
                     }
                     map.setCenter(marker.coordinate, zoomLevel: zoom, animated: false)
                     lastCameraRequest = store.cameraRequest
+                }
+            }
+            if store.routeOverviewRequest != lastOverviewRequest {
+                lastOverviewRequest = store.routeOverviewRequest
+                if let route = store.selectedRoute, let graph = store.graph {
+                    frame(route.coordinates(in: graph).map { coordinate in
+                        return CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                    }, on: map, animated: true)
                 }
             }
             if store.mapFocusRequest != lastFocusRequest {
@@ -519,14 +552,41 @@ struct OfflineMapView: UIViewRepresentable {
     }
 }
 
+/// Destination B: a flag in the route colour.
+final class DestinationAnnotationView: MLNAnnotationView {
+    override init(annotation: MLNAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        frame = CGRect(x: 0, y: 0, width: 34, height: 34)
+        backgroundColor = OfflineMapView.routeColor
+        layer.cornerRadius = 17
+        layer.borderWidth = 3
+        layer.borderColor = UIColor.white.cgColor
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.4
+        layer.shadowRadius = 6
+        let flag = UIImageView(image: UIImage(systemName: "flag.checkered",
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold)))
+        flag.tintColor = UIColor(red: 0.02, green: 0.12, blue: 0.18, alpha: 1)
+        flag.contentMode = .center
+        flag.frame = bounds
+        addSubview(flag)
+        isAccessibilityElement = true
+        accessibilityLabel = "Destination"
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
 final class PositionAnnotationView: MLNAnnotationView {
     let arrow = UIImageView(image: UIImage(systemName: "location.north.fill"))
 
     override init(annotation: MLNAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        frame = CGRect(x: 0, y: 0, width: 50, height: 50)
+        frame = CGRect(x: 0, y: 0, width: 44, height: 44)
         backgroundColor = UIColor(red: 0.69, green: 0.96, blue: 0.39, alpha: 1)
-        layer.cornerRadius = 25
+        layer.cornerRadius = 22
         layer.borderWidth = 3
         layer.borderColor = UIColor.white.cgColor
         layer.shadowColor = UIColor.black.cgColor
@@ -534,7 +594,7 @@ final class PositionAnnotationView: MLNAnnotationView {
         layer.shadowRadius = 8
         arrow.tintColor = UIColor(red: 0.07, green: 0.12, blue: 0.10, alpha: 1)
         arrow.contentMode = .scaleAspectFit
-        arrow.frame = bounds.insetBy(dx: 13, dy: 11)
+        arrow.frame = bounds.insetBy(dx: 12, dy: 10)
         addSubview(arrow)
         isUserInteractionEnabled = true
         isAccessibilityElement = true

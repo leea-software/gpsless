@@ -9,5 +9,8 @@ struct ContentView: View {
             .onChange(of: scenePhase) { _, phase in
                 store.sceneChanged(phase)
             }
+            .onOpenURL { url in
+                store.open(url)
+            }
     }
 }

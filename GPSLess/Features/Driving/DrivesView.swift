@@ -1,8 +1,10 @@
 import SwiftUI
 
-struct DrivesSheet: View {
+/// Recorded drives: export, replay and delete. Shown inside Settings.
+struct DrivesView: View {
     @ObservedObject var store: NavigationStore
-    @Environment(\.dismiss) private var dismiss
+    /// Called before a replay starts so the settings sheet can close.
+    var onReplay: () -> Void
     @State private var drives = DriveRecorder.recordings()
     @State private var references = FieldReferenceStore.recordings()
 
@@ -11,10 +13,9 @@ struct DrivesSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
                 Section {
-                    Text("Raw sensors, calibration, road estimates and field references stay on this iPhone. Export them after testing. Replay recalculates a drive using this installed engine version.")
+                    Text("Recordings stay on this iPhone until you export them. Replay recalculates a drive with the installed engine.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Text("Files → On My iPhone → GPSLess → Drives / FieldReferences")
@@ -44,7 +45,7 @@ struct DrivesSheet: View {
                                 Label("Export", systemImage: "square.and.arrow.up")
                             }
                             Button {
-                                dismiss()
+                                onReplay()
                                 store.replay(url)
                             } label: {
                                 Label("Replay", systemImage: "play")
@@ -86,18 +87,13 @@ struct DrivesSheet: View {
                     }
                 }
             }
-            .navigationTitle("Recorded drives")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
-            .onReceive(store.$lastRecording) { _ in
-                drives = DriveRecorder.recordings()
-                references = FieldReferenceStore.recordings()
-            }
+        .scrollContentBackground(.hidden)
+        .background(Theme.background)
+        .navigationTitle("Recorded drives")
+        .navigationBarTitleDisplayMode(.inline)
+        .onReceive(store.$lastRecording) { _ in
+            drives = DriveRecorder.recordings()
+            references = FieldReferenceStore.recordings()
         }
     }
 

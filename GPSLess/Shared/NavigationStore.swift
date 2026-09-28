@@ -21,7 +21,21 @@ final class NavigationStore: ObservableObject {
     @Published var phase: DrivePhase = .loading
     @Published var graph: RoadGraph?
     @Published var selection: RoadPosition?
-    @Published private(set) var selectedRoute: SelectedRoute?
+    @Published private(set) var selectedRoute: SelectedRoute? {
+        didSet {
+            if let selectedRoute, let graph {
+                routeIndex = RouteIndex(route: selectedRoute, graph: graph)
+            } else {
+                routeIndex = nil
+            }
+        }
+    }
+    /// Planned driving time and name of the chosen route's destination.
+    @Published private(set) var plannedRouteSeconds: Double?
+    @Published private(set) var destinationName: String?
+    private var pendingDestinationName: String?
+    @Published private(set) var routeOverviewRequest = 0
+    private var routeIndex: RouteIndex?
     /// Offered routes between A and B; the chosen one is `selectedRoute`.
     @Published private(set) var routeOptions: [RouteOption] = []
     @Published private(set) var selectedRouteIndex = 0
@@ -32,6 +46,11 @@ final class NavigationStore: ObservableObject {
     @Published private(set) var routeLocked = false
     @Published private(set) var choosingDestination = false
     @Published private(set) var planningRoute = false
+    /// Why the last tap or search result could not become point A or B, or
+    /// why no route was found; shown on the planning card until the next try.
+    @Published private(set) var selectionProblem: String?
+    /// A place shared from another maps app before the map finished loading.
+    private var pendingSharedPlace: SharedPlace?
     private var routeGeneration = UUID()
     @Published var estimate: TrackingEstimate?
     @Published var sample: MotionSample?
@@ -244,8 +263,10 @@ final class NavigationStore: ObservableObject {
         }
         guard let position = graph.nearest(coordinate, maximumDistance: maximumDistance) else {
             message = "Tap closer to a road inside the \(region.name) coverage"
+            selectionProblem = "No mapped road within \(Int(maximumDistance)) m of that place. Tap a road on the map instead."
             return
         }
+        selectionProblem = nil
         if choosingDestination, let selection {
             planRoute(from: selection, to: position, graph: graph)
             return
@@ -278,7 +299,51 @@ final class NavigationStore: ObservableObject {
             return
         }
         choosingDestination = true
+        pendingDestinationName = nil
+        selectionProblem = nil
         message = "Tap point B on the map · preview the shortest legal route"
+    }
+
+    /// Back from choosing B to adjusting the starting point.
+    func cancelDestination() {
+        guard phase == .selecting, choosingDestination, !planningRoute else {
+            return
+        }
+        choosingDestination = false
+        selectionProblem = nil
+        message = "Drag the marker along the road · check the arrow"
+    }
+
+    func showRouteOverview() {
+        follow = false
+        routeOverviewRequest += 1
+    }
+
+    /// Distance left along the chosen route and the planned time for it.
+    struct TripProgress {
+        let remainingMetres: Double
+        let remainingSeconds: Double?
+        let destination: String
+    }
+
+    var tripProgress: TripProgress? {
+        guard let route = selectedRoute, let graph, let index = routeIndex, index.route == route else {
+            return nil
+        }
+        var position = selection
+        if phase != .selecting, let estimate {
+            position = estimate.position
+        }
+        let offset = position.flatMap { position in
+            return index.offset(of: position)
+        } ?? 0
+        let remaining = max(0, index.length - offset)
+        let seconds = plannedRouteSeconds.map { planned in
+            return planned * remaining / max(1, index.length)
+        }
+        let street = graph.edges[route.destination.edge].record.name
+        return TripProgress(remainingMetres: remaining, remainingSeconds: seconds,
+                            destination: destinationName ?? (street.isEmpty ? "Destination" : street))
     }
 
     private func planRoute(from start: RoadPosition, to destination: RoadPosition, graph: RoadGraph) {
@@ -297,11 +362,19 @@ final class NavigationStore: ObservableObject {
             self.planningRoute = false
             guard let first = options.first else {
                 self.message = "No legal route from this direction. Choose another point B or reset your starting point."
+                self.selectionProblem = "No legal route from this start direction. Choose another destination, or go back and flip the arrow."
                 return
             }
             self.routeOptions = options
             self.selectedRouteIndex = 0
             self.selectedRoute = first.route
+            self.plannedRouteSeconds = first.seconds
+            if let name = self.pendingDestinationName {
+                self.destinationName = name
+                self.pendingDestinationName = nil
+            } else if phaseAtRequest == .selecting {
+                self.destinationName = nil
+            }
             self.choosingDestination = false
             self.routeLocked = true
             if options.count > 1 {
@@ -320,6 +393,7 @@ final class NavigationStore: ObservableObject {
         }
         selectedRouteIndex = index
         selectedRoute = routeOptions[index].route
+        plannedRouteSeconds = routeOptions[index].seconds
         message = "\(routeOptions[index].label) route chosen"
     }
 
@@ -335,15 +409,42 @@ final class NavigationStore: ObservableObject {
     /// Search results set point A or B when the map is waiting for one;
     /// otherwise they only move the map.
     func useSearchResult(_ result: SearchResult) {
-        useSearchCoordinate(result.entry.coordinate)
+        useSearchCoordinate(result.entry.coordinate, name: result.entry.name)
     }
 
-    func useSearchCoordinate(_ coordinate: Coordinate) {
+    func useSearchCoordinate(_ coordinate: Coordinate, name: String? = nil) {
         mapFocus = coordinate
         mapFocusRequest += 1
         if phase == .selecting, !routeLocked, !planningRoute {
+            if choosingDestination {
+                pendingDestinationName = name
+            }
             // Place markers sit in village centres, often away from a road.
             select(coordinate, maximumDistance: 400)
+        }
+    }
+
+    /// A place from Google Maps or another app, shared or pasted: it becomes
+    /// point A or B like a search result, or is shown when neither is open.
+    /// Returns false when it lies outside the loaded map.
+    @discardableResult
+    func useSharedPlace(_ place: SharedPlace) -> Bool {
+        guard let graph else {
+            pendingSharedPlace = place
+            return true
+        }
+        let coordinate = Coordinate(latitude: place.latitude, longitude: place.longitude)
+        guard graph.contains(coordinate) else {
+            selectionProblem = "That place is outside the \(region.name) map. Choose another map in Settings first."
+            return false
+        }
+        useSearchCoordinate(coordinate, name: place.name ?? "Shared place")
+        return true
+    }
+
+    func open(_ url: URL) {
+        if let place = SharedPlaceResolver.place(fromAppURL: url) {
+            useSharedPlace(place)
         }
     }
 
@@ -489,6 +590,8 @@ final class NavigationStore: ObservableObject {
     }
 
     func setPositionAgain() {
+        destinationName = nil
+        selectionProblem = nil
         routeGeneration = UUID()
         selectedRoute = nil
         routeOptions = []
@@ -518,6 +621,8 @@ final class NavigationStore: ObservableObject {
     }
 
     func resetEverything() {
+        destinationName = nil
+        selectionProblem = nil
         routeGeneration = UUID()
         replayGeneration = UUID()
         replayTask?.cancel()
@@ -746,6 +851,10 @@ final class NavigationStore: ObservableObject {
                     self.placeSearch = search
                     self.phase = .selecting
                     self.message = "Tap your starting road · \(region.name) works completely offline"
+                    if let place = self.pendingSharedPlace {
+                        self.pendingSharedPlace = nil
+                        self.useSharedPlace(place)
+                    }
                     if ProcessInfo.processInfo.arguments.contains("--ui-testing")
                         && !ProcessInfo.processInfo.arguments.contains("--ui-testing-no-selection") {
                         self.select(region.testingStart)

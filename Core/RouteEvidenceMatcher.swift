@@ -40,6 +40,11 @@ struct RouteEvidenceEvent: Codable {
     var anchorSigmaMetres: Double? = nil
     var anchor: String? = nil
     var correction: String? = nil
+    /// Engine 3.2: radius around the anchor holding 95% of all route
+    /// hypotheses, and the RMS heading residual of the matched profile.
+    var credibleRadiusMetres: Double? = nil
+    var profileResidualDegrees: Double? = nil
+    var profileLengthMetres: Double? = nil
 }
 
 struct RouteEvidenceDecision {
@@ -54,34 +59,112 @@ struct RouteEvidenceDecision {
     var anchorSigma: Double? = nil
     var mixtureSigma: Double? = nil
     var anchor: String? = nil
+    /// Radius around the anchor that holds 95% of all hypotheses' mass. Unlike
+    /// the mixture spread it ignores a few percent of far-away alternatives.
+    var credibleRadius: Double? = nil
+    var profileResidual: Double? = nil
+    var profileLength: Double? = nil
+}
+
+/// The car's heading over the road just driven: gyro yaw integrated against
+/// the odometer. `distances` count back from now (descending to 0) and
+/// `headings` are the integrated yaw there, in radians clockwise.
+struct ObservedHeadingProfile {
+    let distances: [Double]
+    let headings: [Double]
+    /// Distance driven since the turn started, passed its angular midpoint
+    /// and ended.
+    let sinceStart: Double
+    let sinceMidpoint: Double?
+    let sinceEnd: Double
+
+    var length: Double {
+        return distances.first ?? 0
+    }
+}
+
+/// The selected route's heading every 5 m, clockwise from north and
+/// unwrapped, from a 20 m chord so polyline vertices read as the smooth
+/// bends a car drives.
+struct RouteHeadingProfile {
+    static let step = 5.0
+    private let headings: [Double]
+
+    init(route: RouteIndex, graph: RoadGraph) {
+        let length = route.length
+        var headings: [Double] = []
+        var previous: Double?
+        let count = Int(length / Self.step)
+        headings.reserveCapacity(count + 1)
+        for index in 0...max(0, count) {
+            let offset = Double(index) * Self.step
+            guard let before = route.position(at: clamp(offset - 10, 0, length)),
+                  let after = route.position(at: clamp(offset + 10, 0, length)) else {
+                headings.append(previous ?? 0)
+                continue
+            }
+            let vector = graph.edges[after.edge].point(at: after.distance) - graph.edges[before.edge].point(at: before.distance)
+            guard vector.length > 0.5 else {
+                headings.append(previous ?? 0)
+                continue
+            }
+            var heading = bearing(vector)
+            if let previous {
+                heading = previous + angleDifference(heading, previous)
+            }
+            headings.append(heading)
+            previous = heading
+        }
+        self.headings = headings
+    }
+
+    func heading(at offset: Double) -> Double {
+        guard !headings.isEmpty else {
+            return 0
+        }
+        let position = clamp(offset / Self.step, 0, Double(headings.count - 1))
+        let lower = Int(position)
+        let upper = min(headings.count - 1, lower + 1)
+        let fraction = position - Double(lower)
+        return headings[lower] + (headings[upper] - headings[lower]) * fraction
+    }
 }
 
 /// Tracks the car's position along the selected route from completed turns,
 /// keeping several weighted hypotheses instead of deciding each turn alone.
 /// Every hypothesis carries a route offset and variance, advanced by the
-/// odometer. A completed turn branches each hypothesis into one child per
-/// nearby mapped feature (Kalman-updated to that feature, weighted by angle
-/// and position agreement) and one child for a turn the map does not explain.
-/// Curvy roads repeat similar bends every 100–200 m, so one turn is rarely
-/// decisive, but the measured spacing between successive bends quickly
-/// eliminates wrong alignments. A small hypothesis around the engine estimate
-/// with its conservative uncertainty is added before each turn so a wrong
-/// sequence can still be abandoned. A feature is accepted once the hypotheses
-/// that matched it hold 75% of the weight; accepted features are not
-/// binding, because every hypothesis keeps its own matched sequence.
+/// odometer. A completed turn compares the gyro heading profile of the road
+/// just driven, from before the turn until now, with the route's heading at
+/// every plausible offset. Each hypothesis branches into its best-fitting
+/// places (its prior times the profile fit) and one child for a turn the map
+/// does not explain. Matching the whole profile uses every bend the car
+/// drives, including long sweeping curves and S-bends that no single turn
+/// feature describes; field drives matched within 10–25 m of GPS. Gentle
+/// turns fit many places and move the hypotheses little. A small hypothesis
+/// around the engine estimate with its conservative uncertainty is added
+/// before each turn so a wrong sequence can still be abandoned. A turn is
+/// accepted once 75% of the weight agrees on the car's place and most of it
+/// matched a mapped bend of the observed direction.
 final class RouteEvidenceMatcher {
     let features: [RouteFeature]
+    private let routeHeadings: RouteHeadingProfile
+    private let routeLength: Double
 
     private struct Hypothesis {
         var offset: Double
         var variance: Double
         var weight: Double
-        var lastFeatureIndex: Int?
+        /// Route offset where the last matched turn ended; a later turn must
+        /// start beyond it.
         var lastMatchedEnd: Double?
-        var matched: RouteFeature?
+        /// Whether this turn matched a mapped bend in the observed direction.
+        var matched = false
     }
 
-    static let minimumObservedAngle = 30.0 * .pi / 180
+    static let minimumObservedAngle = 15.0 * .pi / 180
+    static let turnaroundAngle = 150.0 * .pi / 180
+    static let turnaroundSigma = 25.0
+    static let turningPerStep = 1.0 * .pi / 180
     static let minimumFeatureAngle = 20.0 * .pi / 180
     static let acceptanceWeight = 0.75
     /// Odometer error per metre driven between turns: vibration distance was
@@ -92,15 +175,32 @@ final class RouteEvidenceMatcher {
     private static let grossOdometerError = 0.3
     private static let grossOdometerWeight = 0.05
     private static let detectionProbability = 0.85
-    /// Density of observed turns the map does not explain, per metre of route.
-    /// Gentle turns can come from bends drawn smoother than driven; right-angle
-    /// turns away from any mapped turn are rare on a followed route.
-    private static let clutterDensity = 1.0 / 1000
+    /// Heading residual at the true place once the constant offset is
+    /// removed: 1–3° RMS on the Lviv drives, up to 7° through compound bends.
+    /// Residuals are correlated over about 40 m of road.
+    private static let headingSigma = 5.0 * .pi / 180
+    private static let correlationLength = 40.0
+    /// A turn that fits nowhere better than this RMS is treated as unmapped
+    /// (a lane shift, road works or a detour). Gentle unmapped turns are
+    /// common; right-angle turns away from any mapped bend are rare on a
+    /// followed route.
+    private static let clutterResidual = 9.0 * .pi / 180
+    private static let clutterScale = 0.2
     private static func clutterAngleLikelihood(_ angle: Double) -> Double {
-        return 0.25 * exp(-max(0, abs(angle) - minimumObservedAngle) / (20 * .pi / 180))
+        return exp(-max(0, abs(angle) - 30 * .pi / 180) / (20 * .pi / 180))
     }
+    /// True places fitted within 1–7° RMS on field drives and a wide arc
+    /// through a sharply drawn corner within 11°; service roads missing
+    /// from the map fitted at 22°. Such a fit must not move the estimate.
+    private static let maximumAcceptedResidual = 14.0 * .pi / 180
+    /// The odometer may be off by a few percent, or much more while the axle
+    /// echo is locked wrongly; the profile is matched at each of these scales.
+    private static let scales = [0.8, 0.87, 0.93, 1.0, 1.07, 1.15, 1.25]
+    private static let profileMargin = 40.0
+    static let maximumProfileLength = 2000.0
     private static let fallbackWeight = 0.02
     private static let maximumHypotheses = 32
+    private static let maximumChildren = 3
 
     private var hypotheses: [Hypothesis] = []
     private var referenceOdometer = 0.0
@@ -109,12 +209,14 @@ final class RouteEvidenceMatcher {
     private var lastTurnEndTime: Double?
     private var startTime: Double?
 
-    init(route: SelectedRoute, graph: RoadGraph) {
-        features = Self.buildFeatures(route: RouteIndex(route: route, graph: graph), graph: graph)
+    convenience init(route: SelectedRoute, graph: RoadGraph) {
+        self.init(route: RouteIndex(route: route, graph: graph), graph: graph)
     }
 
     init(route: RouteIndex, graph: RoadGraph) {
         features = Self.buildFeatures(route: route, graph: graph)
+        routeHeadings = RouteHeadingProfile(route: route, graph: graph)
+        routeLength = route.length
     }
 
     func start(at time: Double?) {
@@ -131,6 +233,8 @@ final class RouteEvidenceMatcher {
     ///   - distanceSinceMidpoint: distance driven since the turn's angular
     ///     midpoint, when the motion history resolves it.
     ///   - distanceSinceEnd: distance driven since the turn ended.
+    ///   - profile: the measured heading profile; without it the turn is
+    ///     modelled as a constant-rate turn from its angle and timing.
     func match(turn: TurnObservation,
                time: Double,
                estimatedRouteOffset: Double,
@@ -138,7 +242,8 @@ final class RouteEvidenceMatcher {
                estimatedSpeed: Double,
                odometer: Double? = nil,
                distanceSinceMidpoint: Double? = nil,
-               distanceSinceEnd: Double? = nil) -> RouteEvidenceDecision {
+               distanceSinceEnd: Double? = nil,
+               profile measured: ObservedHeadingProfile? = nil) -> RouteEvidenceDecision {
         let precedingStraightSeconds: Double?
         if let lastTurnEndTime {
             precedingStraightSeconds = max(0, turn.start - lastTurnEndTime)
@@ -166,7 +271,7 @@ final class RouteEvidenceMatcher {
             var propagated: [Hypothesis] = []
             for var hypothesis in hypotheses {
                 hypothesis.offset += driven
-                hypothesis.matched = nil
+                hypothesis.matched = false
                 var gross = hypothesis
                 hypothesis.variance += pow(Self.odometerError * driven, 2)
                 hypothesis.weight *= 1 - Self.grossOdometerWeight
@@ -185,67 +290,75 @@ final class RouteEvidenceMatcher {
         }
         referenceOdometer = odometerNow
 
-        let useMidpoint = distanceSinceMidpoint != nil
-        let sinceTurn = distanceSinceMidpoint ?? distanceSinceEnd ?? max(0, estimatedSpeed) * max(0, time - turn.end)
+        let observed = measured ?? Self.rampProfile(turn: turn, time: time, speed: estimatedSpeed,
+                                                    sinceMidpoint: distanceSinceMidpoint, sinceEnd: distanceSinceEnd)
+        let fit = ProfileFit(observed: observed, route: routeHeadings)
+        let effective = max(1, observed.length / Self.correlationLength)
+        let clutterLikelihood = Self.clutterScale * Self.clutterAngleLikelihood(turn.angle)
+            * exp(-0.5 * effective * pow(Self.clutterResidual / Self.headingSigma, 2))
+        let minimumMappedAngle = max(10 * .pi / 180, 0.5 * abs(turn.angle))
+        // Where the turn lies relative to the car now: measured by the
+        // odometer along a measured profile or from the turn's angular
+        // midpoint, only estimated from its end time and speed otherwise.
+        let placement = measured != nil ? 5.0 : (distanceSinceMidpoint != nil ? 8.0 : 25.0)
         var children: [Hypothesis] = []
         for hypothesis in hypotheses {
-            let turnOffset = hypothesis.offset - sinceTurn
             var clutter = hypothesis
-            clutter.weight *= (1 - Self.detectionProbability) * Self.clutterDensity * Self.clutterAngleLikelihood(turn.angle)
+            clutter.weight *= (1 - Self.detectionProbability) * clutterLikelihood
             children.append(clutter)
-            let reach = 4 * sqrt(hypothesis.variance + 70 * 70) + 20
-            for feature in features {
-                if let last = hypothesis.lastFeatureIndex, feature.index <= last {
-                    continue
-                }
-                if let end = hypothesis.lastMatchedEnd, feature.start < end - 10 {
-                    continue
-                }
-                let featureOffset = useMidpoint ? feature.midpoint : feature.end
-                let innovation = featureOffset - turnOffset
-                guard abs(innovation) <= reach else {
-                    continue
-                }
-                let length = feature.end - feature.start
-                let featureSigma = useMidpoint ? max(8, 0.3 * length) : max(25, 0.5 * length)
-                let innovationVariance = hypothesis.variance + featureSigma * featureSigma
-                let angleSigma = 12 * .pi / 180 + 0.15 * abs(feature.angle)
-                let residual = angleDifference(turn.angle, feature.angle)
-                let likelihood = Self.detectionProbability * exp(-0.5 * pow(residual / angleSigma, 2))
-                    * exp(-0.5 * innovation * innovation / innovationVariance) / sqrt(2 * .pi * innovationVariance)
-                guard likelihood > 0 else {
-                    continue
-                }
-                let gain = hypothesis.variance / innovationVariance
-                children.append(Hypothesis(offset: hypothesis.offset + gain * innovation,
-                                           variance: max(1, (1 - gain) * hypothesis.variance),
-                                           weight: hypothesis.weight * likelihood,
-                                           lastFeatureIndex: feature.index, lastMatchedEnd: feature.end,
-                                           matched: feature))
+            let sigma = sqrt(hypothesis.variance + placement * placement)
+            let floor = hypothesis.variance * placement * placement / (hypothesis.variance + placement * placement)
+            var lower = max(0, hypothesis.offset - 4 * sigma - 30)
+            let upper = min(routeLength, hypothesis.offset + 4 * sigma + 30)
+            if let end = hypothesis.lastMatchedEnd {
+                lower = max(lower, end - 10 + 0.8 * observed.sinceStart)
+            }
+            let first = Int((lower / RouteHeadingProfile.step).rounded(.up))
+            let last = Int((upper / RouteHeadingProfile.step).rounded(.down))
+            guard last >= first else {
+                continue
+            }
+            let normaliser = log(sigma * sqrt(2 * .pi))
+            let density = (first...last).map { cell -> Double in
+                let offset = Double(cell) * RouteHeadingProfile.step
+                let z = (offset - hypothesis.offset) / sigma
+                let logLikelihood = -0.5 * effective * fit.meanSquaredResidual(cell: cell) / pow(Self.headingSigma, 2)
+                return exp(-0.5 * z * z - normaliser + logLikelihood)
+            }
+            for basin in Self.basins(density, firstCell: first).prefix(Self.maximumChildren) {
+                let mapped = routeHeadings.heading(at: basin.mean - observed.sinceEnd)
+                    - routeHeadings.heading(at: basin.mean - observed.sinceStart)
+                let bend = mapped * turn.angle > 0 && abs(mapped) >= minimumMappedAngle
+                children.append(Hypothesis(offset: basin.mean, variance: max(floor, basin.variance),
+                                           weight: hypothesis.weight * Self.detectionProbability * basin.mass,
+                                           lastMatchedEnd: bend ? basin.mean - observed.sinceEnd : hypothesis.lastMatchedEnd,
+                                           matched: bend))
             }
         }
         hypotheses = Self.prune(children)
         guard !hypotheses.isEmpty else {
             return RouteEvidenceDecision(feature: nil, confidence: 0, runnerUpConfidence: 0,
-                                         reason: "No forward route feature is physically reachable",
+                                         reason: "No forward route position is physically reachable",
                                          precedingStraightSeconds: precedingStraightSeconds)
         }
-        // Hypotheses that explain this turn by the same feature (or by none)
-        // form one alternative, whatever their odometer spread.
-        var groups: [Int: (weight: Double, feature: RouteFeature?)] = [:]
-        for hypothesis in hypotheses {
-            let key = hypothesis.matched?.index ?? -1
-            groups[key, default: (0, hypothesis.matched)].weight += hypothesis.weight
-        }
-        let ranked = groups.sorted { first, second in
-            return first.value.weight > second.value.weight
-        }
-        let best = ranked[0]
-        let confidence = best.value.weight
-        let runnerUp = ranked.count > 1 ? ranked[1].value.weight : 0
+        // Hypotheses that matched a mapped bend and agree on the car's place
+        // form one alternative, whichever earlier sequence they came from.
+        let lead = hypotheses.first { hypothesis in
+            return hypothesis.matched
+        } ?? hypotheses[0]
+        let reach = max(30, 3 * sqrt(lead.variance))
         let members = hypotheses.filter { hypothesis in
-            return (hypothesis.matched?.index ?? -1) == best.key
+            return hypothesis.matched == lead.matched && abs(hypothesis.offset - lead.offset) <= reach
         }
+        let confidence = members.reduce(0.0) { sum, hypothesis in
+            return sum + hypothesis.weight
+        }
+        let unmatchedWeight = hypotheses.reduce(0.0) { sum, hypothesis in
+            return sum + (hypothesis.matched ? 0 : hypothesis.weight)
+        }
+        let runnerUp = hypotheses.first { hypothesis in
+            return hypothesis.matched != lead.matched || abs(hypothesis.offset - lead.offset) > reach
+        }?.weight ?? 0
         let anchorOffset = members.reduce(0.0) { sum, hypothesis in
             return sum + hypothesis.weight * hypothesis.offset
         } / confidence
@@ -255,21 +368,263 @@ final class RouteEvidenceMatcher {
         let mixtureVariance = hypotheses.reduce(0.0) { sum, hypothesis in
             return sum + hypothesis.weight * (hypothesis.variance + pow(hypothesis.offset - anchorOffset, 2))
         }
-        guard confidence >= Self.acceptanceWeight, let feature = best.value.feature else {
+        let residual = sqrt(fit.meanSquaredResidual(cell: Int((anchorOffset / RouteHeadingProfile.step).rounded())))
+        guard lead.matched, confidence >= Self.acceptanceWeight, residual <= Self.maximumAcceptedResidual else {
+            // A reversal can be driven either way round (a left loop, a right
+            // one through a car park, a three-point turn), so its heading
+            // profile need not match the mapped one; the route reversing
+            // nearby is what identifies it. Otherwise the engine stops.
+            if abs(angleDifference(turn.angle, 0)) >= Self.turnaroundAngle,
+               let turnaround = routeTurnaround(near: estimatedRouteOffset - observed.sinceEnd,
+                                                reach: max(150, 1.5 * uncertainty)) {
+                let anchorOffset = min(routeLength, turnaround.end + observed.sinceEnd)
+                hypotheses = [Hypothesis(offset: anchorOffset, variance: pow(Self.turnaroundSigma, 2), weight: 1,
+                                         lastMatchedEnd: turnaround.end, matched: true)]
+                lastTurnEndTime = turn.end
+                let feature = RouteFeature(index: -1, start: turnaround.start, end: turnaround.end,
+                                           midpoint: (turnaround.start + turnaround.end) / 2,
+                                           angle: routeHeadings.heading(at: turnaround.end) - routeHeadings.heading(at: turnaround.start),
+                                           precedingStraightMetres: 0, followingStraightMetres: 0, supportsTimedCorrection: false)
+                var decision = RouteEvidenceDecision(feature: feature, confidence: 1, runnerUpConfidence: 0,
+                                                     reason: "U-turn matched to the route's turnaround",
+                                                     precedingStraightSeconds: precedingStraightSeconds,
+                                                     anchorRouteOffset: anchorOffset, anchorSigma: Self.turnaroundSigma,
+                                                     mixtureSigma: Self.turnaroundSigma, anchor: "end")
+                decision.profileResidual = residual
+                decision.profileLength = observed.length
+                return decision
+            }
+            var reason = "Several route alignments remain plausible; retaining alternatives"
+            if unmatchedWeight >= Self.acceptanceWeight {
+                reason = "Turn not explained by the route near the tracked position"
+            } else if lead.matched && confidence >= Self.acceptanceWeight {
+                reason = "Best route fit is too poor to move the estimate"
+            }
             var decision = RouteEvidenceDecision(feature: nil, confidence: confidence, runnerUpConfidence: runnerUp,
-                                                 reason: best.value.feature == nil && confidence >= Self.acceptanceWeight
-                                                    ? "Turn not explained by the route near the tracked position"
-                                                    : "Several route alignments remain plausible; retaining alternatives",
-                                                 precedingStraightSeconds: precedingStraightSeconds)
+                                                 reason: reason, precedingStraightSeconds: precedingStraightSeconds)
             decision.mixtureSigma = sqrt(mixtureVariance)
+            decision.profileResidual = residual
+            decision.profileLength = observed.length
             return decision
         }
         lastTurnEndTime = turn.end
-        return RouteEvidenceDecision(feature: feature, confidence: confidence, runnerUpConfidence: runnerUp,
-                                     reason: "Completed turn matched against the selected route",
-                                     precedingStraightSeconds: precedingStraightSeconds,
-                                     anchorRouteOffset: anchorOffset, anchorSigma: sqrt(anchorVariance),
-                                     mixtureSigma: sqrt(mixtureVariance), anchor: useMidpoint ? "midpoint" : "end")
+        let sinceMidpoint = observed.sinceMidpoint ?? (observed.sinceStart + observed.sinceEnd) / 2
+        let feature = matchedFeature(turn: turn, midpoint: anchorOffset - sinceMidpoint)
+            ?? RouteFeature(index: -1, start: anchorOffset - observed.sinceStart, end: anchorOffset - observed.sinceEnd,
+                            midpoint: anchorOffset - sinceMidpoint, angle: turn.angle, precedingStraightMetres: 0,
+                            followingStraightMetres: 0, supportsTimedCorrection: false)
+        var decision = RouteEvidenceDecision(feature: feature, confidence: confidence, runnerUpConfidence: runnerUp,
+                                             reason: "Completed turn matched against the selected route",
+                                             precedingStraightSeconds: precedingStraightSeconds,
+                                             anchorRouteOffset: anchorOffset, anchorSigma: sqrt(anchorVariance),
+                                             mixtureSigma: sqrt(mixtureVariance),
+                                             anchor: observed.sinceMidpoint != nil ? "midpoint" : "end")
+        decision.credibleRadius = credibleRadius(around: anchorOffset, mass: 0.95)
+        decision.profileResidual = residual
+        decision.profileLength = observed.length
+        return decision
+    }
+
+    /// The route's reversal (150° within 150 m) whose end lies nearest to
+    /// `offset`, within `reach`.
+    private func routeTurnaround(near offset: Double, reach: Double) -> (start: Double, end: Double)? {
+        let step = RouteHeadingProfile.step
+        let span = 150.0
+        var best: (start: Double, end: Double)?
+        var candidate = max(0, offset - reach - span)
+        while candidate <= min(routeLength, offset + reach + span) {
+            let heading = routeHeadings.heading(at: candidate)
+            var start: Double?
+            var back = candidate - step
+            while back >= max(0, candidate - span) {
+                if abs(heading - routeHeadings.heading(at: back)) >= Self.turnaroundAngle {
+                    start = back
+                    break
+                }
+                back -= step
+            }
+            guard var start else {
+                candidate += step
+                continue
+            }
+            // Widen to where the heading stops changing on either side.
+            var end = candidate
+            while end + step <= min(routeLength, candidate + 60),
+                  abs(routeHeadings.heading(at: end + step) - routeHeadings.heading(at: end)) > Self.turningPerStep {
+                end += step
+            }
+            while start - step >= max(0, back - 60),
+                  abs(routeHeadings.heading(at: start) - routeHeadings.heading(at: start - step)) > Self.turningPerStep {
+                start -= step
+            }
+            if abs(end - offset) <= reach, abs(end - offset) < abs((best?.end ?? .infinity) - offset) {
+                best = (start, end)
+            }
+            candidate = end + span
+        }
+        return best
+    }
+
+    /// The discrete route feature the matched turn corresponds to, if any;
+    /// its mapped midpoint calibrates the wheelbase.
+    private func matchedFeature(turn: TurnObservation, midpoint: Double) -> RouteFeature? {
+        return features.filter { feature in
+            return feature.angle * turn.angle > 0
+                && abs(angleDifference(feature.angle, turn.angle)) <= 25 * .pi / 180
+                && abs(feature.midpoint - midpoint) <= max(20, 0.5 * (feature.end - feature.start))
+        }.min { first, second in
+            return abs(first.midpoint - midpoint) < abs(second.midpoint - midpoint)
+        }
+    }
+
+    /// Smallest radius around `centre` holding `mass` of all hypotheses.
+    private func credibleRadius(around centre: Double, mass target: Double) -> Double {
+        func mass(within radius: Double) -> Double {
+            return hypotheses.reduce(0.0) { sum, hypothesis in
+                let sigma = sqrt(max(1, hypothesis.variance))
+                let upper = (centre + radius - hypothesis.offset) / (sigma * sqrt(2))
+                let lower = (centre - radius - hypothesis.offset) / (sigma * sqrt(2))
+                return sum + hypothesis.weight * 0.5 * (erf(upper) - erf(lower))
+            }
+        }
+        var low = 0.0
+        var high = 1000.0
+        while mass(within: high) < target && high < routeLength * 2 {
+            high *= 2
+        }
+        for _ in 0..<40 {
+            let middle = (low + high) / 2
+            if mass(within: middle) >= target {
+                high = middle
+            } else {
+                low = middle
+            }
+        }
+        return high
+    }
+
+    /// The car's measured heading, sampled against distance, compared with
+    /// the route's heading when the car is at a given offset now.
+    private final class ProfileFit {
+        let observed: ObservedHeadingProfile
+        let route: RouteHeadingProfile
+        private var cache: [Int: Double] = [:]
+
+        init(observed: ObservedHeadingProfile, route: RouteHeadingProfile) {
+            self.observed = observed
+            self.route = route
+        }
+
+        /// Mean squared heading residual, after removing the constant
+        /// heading offset, at the best odometer scale.
+        func meanSquaredResidual(cell: Int) -> Double {
+            if let cached = cache[cell] {
+                return cached
+            }
+            let offset = Double(cell) * RouteHeadingProfile.step
+            let count = Double(observed.distances.count)
+            var best = Double.infinity
+            for scale in RouteEvidenceMatcher.scales {
+                var sum = 0.0
+                var squares = 0.0
+                for index in observed.distances.indices {
+                    let residual = observed.headings[index] - route.heading(at: offset - scale * observed.distances[index])
+                    sum += residual
+                    squares += residual * residual
+                }
+                best = min(best, max(0, squares / count - pow(sum / count, 2)))
+            }
+            cache[cell] = best
+            return best
+        }
+    }
+
+    /// Splits a density sampled every 5 m into its separate peaks, merging
+    /// peaks divided only by a shallow dip. Heaviest first.
+    private static func basins(_ density: [Double], firstCell: Int) -> [(mass: Double, mean: Double, variance: Double)] {
+        guard !density.isEmpty else {
+            return []
+        }
+        var peaks: [Int] = []
+        for index in density.indices {
+            let left = index > 0 ? density[index - 1] : -1
+            let right = index + 1 < density.count ? density[index + 1] : -1
+            if density[index] > 0, density[index] >= left, density[index] > right {
+                peaks.append(index)
+            }
+        }
+        var bounds: [Int] = [0]
+        if peaks.count > 1 {
+            var kept = peaks[0]
+            for peak in peaks.dropFirst() {
+                let valley = (kept...peak).min { first, second in
+                    return density[first] < density[second]
+                } ?? kept
+                if density[valley] < 0.3 * min(density[kept], density[peak]) {
+                    bounds.append(valley)
+                    kept = peak
+                } else if density[peak] > density[kept] {
+                    kept = peak
+                }
+            }
+        }
+        bounds.append(density.count)
+        var result: [(mass: Double, mean: Double, variance: Double)] = []
+        for part in 0..<(bounds.count - 1) {
+            let range = bounds[part]..<bounds[part + 1]
+            var mass = 0.0
+            var moment = 0.0
+            for index in range {
+                mass += density[index]
+                moment += density[index] * Double(firstCell + index) * RouteHeadingProfile.step
+            }
+            guard mass > 0, mass.isFinite else {
+                continue
+            }
+            let mean = moment / mass
+            var spread = 0.0
+            for index in range {
+                spread += density[index] * pow(Double(firstCell + index) * RouteHeadingProfile.step - mean, 2)
+            }
+            let step = RouteHeadingProfile.step
+            result.append((mass * step, mean, max(16, spread / mass + step * step / 12)))
+        }
+        guard let heaviest = result.map(\.mass).max() else {
+            return []
+        }
+        return result.filter { basin in
+            return basin.mass >= 1e-3 * heaviest
+        }.sorted { first, second in
+            return first.mass > second.mass
+        }
+    }
+
+    /// A constant-rate turn from the observation's angle and timing, for
+    /// callers without a measured profile.
+    private static func rampProfile(turn: TurnObservation, time: Double, speed: Double,
+                                    sinceMidpoint: Double?, sinceEnd: Double?) -> ObservedHeadingProfile {
+        let speed = max(1, speed)
+        let length = max(5, speed * max(0, turn.end - turn.start))
+        let end = sinceEnd ?? speed * max(0, time - turn.end)
+        let middle = sinceMidpoint ?? end + length / 2
+        let start = middle + length / 2
+        let finish = max(0, middle - length / 2)
+        let span = start + profileMargin
+        let count = Int(min(80, max(8, span / 5)))
+        let distances = (0...count).map { index in
+            return span * (1 - Double(index) / Double(count))
+        }
+        let headings = distances.map { distance -> Double in
+            if distance >= start {
+                return 0
+            }
+            if distance <= finish {
+                return turn.angle
+            }
+            return turn.angle * (start - distance) / max(1e-9, start - finish)
+        }
+        return ObservedHeadingProfile(distances: distances, headings: headings, sinceStart: start,
+                                      sinceMidpoint: middle, sinceEnd: finish)
     }
 
     /// Merges hypotheses that agree on offset and matched sequence, keeps the
@@ -286,14 +641,13 @@ final class RouteEvidenceMatcher {
         }
         var merged: [Hypothesis] = []
         for child in sorted where child.weight / total > 1e-6 {
-            if var last = merged.last, abs(last.offset - child.offset) < 3,
-               last.lastFeatureIndex == child.lastFeatureIndex {
+            if var last = merged.last, abs(last.offset - child.offset) < 3, last.matched == child.matched,
+               abs((last.lastMatchedEnd ?? -1e9) - (child.lastMatchedEnd ?? -1e9)) < 10 {
                 let weight = last.weight + child.weight
                 let offset = (last.offset * last.weight + child.offset * child.weight) / weight
                 last.variance = (last.weight * (last.variance + pow(last.offset - offset, 2))
                     + child.weight * (child.variance + pow(child.offset - offset, 2))) / weight
                 if child.weight > last.weight {
-                    last.matched = child.matched
                     last.lastMatchedEnd = child.lastMatchedEnd
                 }
                 last.offset = offset
