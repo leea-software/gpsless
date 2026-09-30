@@ -2,6 +2,18 @@
 
 Engine versions are recorded in every drive recording (`engineVersion`).
 
+## 0.4.5 (build 31)
+
+- Engine 3.7 `3.7.0-tyre-period`: road-bump speed is measured along the road instead of in time, so the echo stays sharp while the car speeds up or brakes and engine hum blurs out. Each drive also learns how far the car travels per tyre revolution, and once it is known the once-per-revolution shake of the tyres counts as a second speed reading above about 50 km/h; at 110–120 km/h, where the road-bump echo is weak, that shake had been mistaken for the echo and read 135–140 km/h. On 13 GPS-logged drives the time with speed more than 10 km/h off fell from 4.1% to 2.7% and more than 20 km/h off from 0.7% to 0.2%; on a long highway drive the worst position error fell from about 690 m to 260 m. Recorded speed rows now include the learned tyre ratio.
+
+## 0.4.4 (build 30)
+
+- Engine 3.6 `3.6.0-same-axis-echo`: road-bump speed uses only the six sensor channels whose echo lines up with the true axle delay, weighted by the echo pattern measured on field drives, and turns down steady engine tones before looking for the echo. On 13 GPS-logged drives the time with speed more than 10 km/h off fell from 5.8% to 4.2%, and the typical 90th-percentile position error from 75 to 31 m. On an interchange approach where an engine tone had held the reading near 85 km/h at about 30, it now reads about 23 km/h.
+
+## 0.4.3 (build 29)
+
+- Engine 3.5 `3.5.0-turn-speed`: in every turn, sideways acceleration ÷ turn rate is used as a check on the road-bump speed, which on an interchange ramp had shown 110–180 km/h at about 30 km/h. The gravity correction no longer trusts a speed that contradicts the turn, which had turned that error into a lasting forward-acceleration bias. On 13 GPS-logged drives the time with speed more than 10 km/h off fell from 6.8% to 5.8%.
+
 ## 0.4.2 (build 28)
 
 - Engine 3.4 `3.4.0-repeat-rejection`: road-bump speed no longer mistakes tyre vibration, which repeats every wheel revolution, for the axle echo; that false echo held the speed 1.2–1.36 times too high for up to a minute at 45–60 km/h. Below 20 km/h, where the echo is rarely measurable, it counts for less, and a speed measurement that is unsure (two modes, wide spread) no longer drags the car's speed toward its average: in a slow turn that had shown 110 km/h at 30 km/h. On 11 GPS-logged drives the time with speed more than 10 km/h off fell from 9.2% to 6.8%.

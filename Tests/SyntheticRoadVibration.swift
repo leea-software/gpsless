@@ -1,3 +1,4 @@
+import Foundation
 import simd
 @testable import GPSLessCore
 
@@ -21,6 +22,21 @@ struct SyntheticRoadVibration {
     var accelerationAmplitude = 0.02
     var rotationAmplitude = 0.05
     var noiseFloor = 0.0001
+    /// Optional tyre non-uniformity: a random profile that repeats every
+    /// circumference along the road, in units of the texture's standard
+    /// deviation.
+    var tyreCircumference: Double? {
+        didSet {
+            var generator = SeededRandom(seed: 29)
+            tyreProfiles = (0..<6).map { _ in
+                return (0..<16).map { _ in
+                    return generator.normal()
+                }
+            }
+        }
+    }
+    var tyreAmplitude = 0.0
+    private var tyreProfiles: [[Double]] = []
     private var previous: [Double]?
 
     init(wheelbase: Double = 2.7, seed: UInt64 = 11, length: Double = 3000) {
@@ -41,8 +57,16 @@ struct SyntheticRoadVibration {
 
     /// Returns acceleration in g and rotation in rad/s, device axes.
     mutating func sample() -> (acceleration: SIMD3<Double>, rotation: SIMD3<Double>) {
-        let road = (0..<6).map { channel in
-            return profile(channel, at: distance) + profile(channel, at: distance - wheelbase)
+        let road = (0..<6).map { channel -> Double in
+            var value = profile(channel, at: distance) + profile(channel, at: distance - wheelbase)
+            if let tyreCircumference {
+                let points = tyreProfiles[channel]
+                let position = (distance / tyreCircumference).truncatingRemainder(dividingBy: 1) * Double(points.count)
+                let lower = Int(position) % points.count
+                let fraction = position - Double(Int(position))
+                value += tyreAmplitude * (points[lower] * (1 - fraction) + points[(lower + 1) % points.count] * fraction)
+            }
+            return value
         }
         let before = previous ?? road
         previous = road

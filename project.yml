@@ -57,8 +57,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(GPSLESS_BUNDLE_IDENTIFIER)
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "0.4.2"
-        CURRENT_PROJECT_VERSION: 28
+        MARKETING_VERSION: "0.4.5"
+        CURRENT_PROJECT_VERSION: 31
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   GPSLessShare:
     type: app-extension
@@ -86,8 +86,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(GPSLESS_BUNDLE_IDENTIFIER).share
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "0.4.2"
-        CURRENT_PROJECT_VERSION: 28
+        MARKETING_VERSION: "0.4.5"
+        CURRENT_PROJECT_VERSION: 31
   GPSLessServiceTests:
     type: bundle.unit-test
     platform: iOS

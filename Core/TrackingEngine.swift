@@ -223,7 +223,7 @@ struct TurnObservation {
 
 /// A bounded road-constrained particle filter. No location or network inputs exist.
 public final class TrackingEngine {
-    static let version = "3.4.0-repeat-rejection"
+    static let version = "3.7.0-tyre-period"
     public let graph: RoadGraph
     public private(set) var estimate: TrackingEstimate?
     /// Speed corrections from road bumps since start, counted once per

@@ -32,6 +32,9 @@ struct MotionProcessingUpdate {
 /// bias near 0.1 m/s².
 final class VehicleMotionProcessor {
     static let method = "speed-aided-gravity-v4"
+    /// Lateral residual, m/s², beyond which a turn gives no gravity evidence;
+    /// field turns stayed within 0.3 m/s² (1σ) of speed × yaw.
+    static let centripetalDisagreement = 1.0
     private(set) var wheelbase: Double
     private(set) var speedObserver: VehicleSpeedObserver
     private(set) var calibrated = false
@@ -200,7 +203,8 @@ final class VehicleMotionProcessor {
         }
         sample.magneticMagnitude = magneticMagnitude
         sample.relativeAltitude = relativeAltitude
-        speedObserver.accumulate(forwardAcceleration: sample.forwardAcceleration, duration: dt)
+        speedObserver.accumulate(forwardAcceleration: sample.forwardAcceleration, lateralAcceleration: sample.lateralAcceleration,
+                                 yawRate: sample.yawRate, duration: dt)
         speedObserver.receive(time: raw.time, totalAcceleration: totalAcceleration(raw),
                               rotation: vector(raw.rotation), gravity: gravity)
         update.speedObservation = speedObserver.update(at: raw.time)
@@ -262,6 +266,14 @@ final class VehicleMotionProcessor {
             }
             vehicle = .zero
             timeConstant = 2
+        } else if abs(yaw) > 0.05 {
+            // A lateral acceleration far from speed × yaw means the speed is
+            // wrong, not gravity: a false 110 km/h on a 30 km/h ramp otherwise
+            // tilted gravity by degrees and left a 1 m/s² forward bias.
+            let lateral = simd_dot(-(total - gravity) * VehicleMotionProjection.standardGravity, before.right)
+            if abs(lateral - observer.speed * yaw) > Self.centripetalDisagreement {
+                return (0, weight)
+            }
         }
         let measured = simd_normalize(total + vehicle / VehicleMotionProjection.standardGravity)
         let gain = min(1, dt / timeConstant) * weight

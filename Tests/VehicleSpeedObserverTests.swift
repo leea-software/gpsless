@@ -104,6 +104,37 @@ final class VehicleSpeedObserverTests: XCTestCase {
         }
     }
 
+    /// Crawling at 30 km/h, an engine order at 12.3 Hz, 190 times the median
+    /// spectral power, correlated every 81 ms and held vibration speed near
+    /// 85 km/h. With the line capped, the axle echo must stay the strongest
+    /// correlation among supported delays.
+    func testSteadyToneDoesNotOutscoreTheEcho() throws {
+        let analyzer = AxleEchoAnalyzer()
+        var random = SeededRandom(seed: 5)
+        let delay = 34
+        // A weak echo against a tone ten times the broadband amplitude: the
+        // tone wins at 80 ms without the cap and the echo wins with it.
+        let amplitude = 10.0
+        let echoGain = 0.3
+        var noise = [[Double]](repeating: [], count: 7)
+        for tick in 0..<600 {
+            let time = Double(tick) * 0.01
+            for channel in 0..<7 {
+                noise[channel].append(random.normal())
+            }
+            let values = (0..<7).map { channel -> Double in
+                let echo = tick >= delay ? echoGain * noise[channel][tick - delay] : 0
+                return noise[channel][tick] + echo + amplitude * sin(2 * .pi * 12.3 * time + Double(channel))
+            }
+            analyzer.append(time: time, values: values)
+        }
+        let correlation = try XCTUnwrap(analyzer.correlation())
+        let resolution = AxleEchoAnalyzer.lagResolution
+        let supported = (7 * resolution)..<(100 * resolution)
+        let strongest = try XCTUnwrap(supported.max { correlation[$0] < correlation[$1] })
+        XCTAssertEqual(Double(strongest) / Double(resolution), Double(delay), accuracy: 1)
+    }
+
     func testIdleVibrationIsObservedAsParked() throws {
         let processor = VehicleMotionProcessor()
         var road = SyntheticRoadVibration()
@@ -206,6 +237,136 @@ final class VehicleSpeedObserverTests: XCTestCase {
         let toothRow = try XCTUnwrap(SpeedGridFilter.speeds.firstIndex { abs($0 - speed / 0.785) < 0.11 })
         XCTAssertGreaterThan(filter.echoEvidence(residual, row: echoRow), 0.9)
         XCTAssertLessThan(filter.echoEvidence(residual, row: toothRow), 0)
+    }
+
+    /// Speeding up from 8 to 14 m/s within the four-second window spreads a
+    /// time-domain echo over delays from 0.34 to 0.19 s. Resampled to
+    /// distance, it must be one sharp peak at the window-centre speed's delay.
+    func testDistanceResamplingSharpensEchoWhileAccelerating() throws {
+        let wheelbase = 2.7
+        var random = SeededRandom(seed: 9)
+        let texture = (0..<7).map { _ in
+            return (0..<400).map { _ in
+                return random.normal()
+            }
+        }
+        func road(_ channel: Int, at position: Double) -> Double {
+            let index = position / 0.25
+            let lower = min(texture[channel].count - 2, max(0, Int(index)))
+            let fraction = min(1, max(0, index - Double(lower)))
+            return texture[channel][lower] * (1 - fraction) + texture[channel][lower + 1] * fraction
+        }
+        let analyzer = AxleEchoAnalyzer()
+        var distance = 5.0
+        var speed = 8.0
+        for tick in 0..<400 {
+            let time = Double(tick) * 0.01
+            speed = 8 + 1.5 * time
+            distance += speed * 0.01
+            let values = (0..<7).map { channel in
+                return road(channel, at: distance) + road(channel, at: distance - wheelbase) + 0.05 * random.normal()
+            }
+            analyzer.append(time: time, values: values + [speed])
+        }
+        let resolution = Double(AxleEchoAnalyzer.lagResolution)
+        let expected = wheelbase / 11 * AxleEchoAnalyzer.sampleRate * resolution
+        let supported = Int(0.06 * AxleEchoAnalyzer.sampleRate * resolution)..<(AxleEchoAnalyzer.maximumLag * AxleEchoAnalyzer.lagResolution)
+        XCTAssertNil(analyzer.distanceSamples(currentSpeed: 1))
+        let timeDomain = try XCTUnwrap(analyzer.correlation())
+        let distanceDomain = try XCTUnwrap(analyzer.correlation(currentSpeed: speed))
+        let strongest = try XCTUnwrap(supported.max { distanceDomain[$0] < distanceDomain[$1] })
+        XCTAssertEqual(Double(strongest), expected, accuracy: 0.02 * expected)
+        let smeared = try XCTUnwrap(supported.map { timeDomain[$0] }.max())
+        XCTAssertGreaterThan(distanceDomain[strongest], 2 * smeared)
+    }
+
+    /// At 113 km/h on a field drive the axle echo was nearly absent while the
+    /// tyre period, 0.785 axle delays, correlated strongly; read as the echo
+    /// it held vibration speed near 140 km/h. With the ratio learned the
+    /// true speed must outscore the tooth's speed; without it the tooth wins.
+    func testLearnedTyrePeriodSupportsTrueHighwaySpeed() throws {
+        let wheelbase = 2.82
+        let filter = SpeedGridFilter(wheelbase: wheelbase)
+        let speed = 31.4
+        let delay = wheelbase / speed * AxleEchoAnalyzer.sampleRate * Double(AxleEchoAnalyzer.lagResolution)
+        var residual = [Double](repeating: 0, count: AxleEchoAnalyzer.maximumLag * AxleEchoAnalyzer.lagResolution)
+        for (centre, height) in [(delay, 0.2), (0.785 * delay, 1.0), (1.57 * delay, 0.5), (2.355 * delay, 0.2)] {
+            for index in residual.indices {
+                residual[index] += height * exp(-0.5 * pow((Double(index) - centre) / 2, 2))
+            }
+        }
+        let trueRow = try XCTUnwrap(SpeedGridFilter.speeds.firstIndex { abs($0 - speed) < 0.01 })
+        let toothRow = try XCTUnwrap(SpeedGridFilter.speeds.firstIndex { abs($0 - speed / 0.785) < 0.11 })
+        XCTAssertGreaterThan(filter.rowEvidence(residual, row: trueRow, predictedSpeed: speed, tyreRatio: 0.785),
+                             filter.rowEvidence(residual, row: toothRow, predictedSpeed: speed, tyreRatio: 0.785))
+        XCTAssertLessThan(filter.rowEvidence(residual, row: trueRow, predictedSpeed: speed, tyreRatio: nil),
+                          filter.rowEvidence(residual, row: toothRow, predictedSpeed: speed, tyreRatio: nil))
+    }
+
+    /// Crawling at 30 km/h, an engine line every 81 ms repeats like the tyre
+    /// period of 98 km/h. The tyre period must not count while the predicted
+    /// speed is low.
+    func testTyrePeriodIsIgnoredWhileCrawling() throws {
+        let wheelbase = 2.82
+        let filter = SpeedGridFilter(wheelbase: wheelbase)
+        let period = 0.081 * AxleEchoAnalyzer.sampleRate * Double(AxleEchoAnalyzer.lagResolution)
+        let residual = (0..<(AxleEchoAnalyzer.maximumLag * AxleEchoAnalyzer.lagResolution)).map { index in
+            return cos(2 * .pi * Double(index) / period)
+        }
+        let fastRow = try XCTUnwrap(SpeedGridFilter.speeds.firstIndex { abs($0 - 27.4) < 0.11 })
+        XCTAssertEqual(filter.rowEvidence(residual, row: fastRow, predictedSpeed: 8.3, tyreRatio: 0.785),
+                       filter.rowEvidence(residual, row: fastRow, predictedSpeed: 8.3, tyreRatio: nil))
+        XCTAssertGreaterThan(filter.rowEvidence(residual, row: fastRow, predictedSpeed: 27, tyreRatio: 0.785),
+                             filter.rowEvidence(residual, row: fastRow, predictedSpeed: 27, tyreRatio: nil))
+    }
+
+    /// A tyre 2.12 m around on a 2.7 m wheelbase shakes the car every 0.785
+    /// axle delays. Speeding up slowly from 43 to 90 km/h, the observer must
+    /// learn that ratio from windows where the echo is confident; on the same
+    /// road without tyre vibration it must learn none, although the echo
+    /// peak's own ripples also repeat at a fixed ratio at any one speed.
+    func testTyreRatioIsLearnedOnlyFromTyreVibration() throws {
+        for amplitude in [0.0, 0.7] {
+            let processor = VehicleMotionProcessor(wheelbase: 2.7)
+            var road = SyntheticRoadVibration(wheelbase: 2.7, length: 5000)
+            road.tyreCircumference = 2.12
+            road.tyreAmplitude = amplitude
+            var speed = 0.0
+            var last: VibrationSpeedObservation?
+            for tick in 0...16000 {
+                let time = Double(tick) * 0.01
+                var acceleration = 0.0
+                if time > 5 && speed < 12 {
+                    acceleration = 2
+                } else if speed >= 12 && speed < 25 {
+                    acceleration = 0.1
+                }
+                speed += acceleration * 0.01
+                road.advance(speed: speed, duration: 0.01)
+                let vibration = road.sample()
+                let total = gravity + SIMD3(0, 0, acceleration / 9.80665) + vibration.acceleration
+                let update = processor.receive(raw(time: time, total: total, rotation: vibration.rotation))
+                XCTAssertNil(update.failure)
+                last = update.speedObservation ?? last
+            }
+            let observation = try XCTUnwrap(last)
+            XCTAssertEqual(observation.speed, speed, accuracy: 1)
+            if amplitude > 0 {
+                XCTAssertEqual(try XCTUnwrap(observation.tyreRatio), 2.12 / 2.7, accuracy: 0.011)
+            } else {
+                XCTAssertNil(observation.tyreRatio)
+            }
+        }
+    }
+
+    /// On an interchange ramp the phone measured 2.15 m/s² sideways at
+    /// 14.8°/s, which is 30 km/h, while vibration speed claimed 110 km/h.
+    func testTurnAccelerationSupportsTrueSpeedOverFalseEcho() {
+        let ramp = SpeedGridFilter.Turn(lateralAcceleration: 2.15, yawRate: 14.8 * .pi / 180)
+        XCTAssertGreaterThan(SpeedGridFilter.turnLikelihood(ramp, speed: 30 / 3.6), 0.95)
+        XCTAssertLessThan(SpeedGridFilter.turnLikelihood(ramp, speed: 110 / 3.6), 0.02)
+        let straight = SpeedGridFilter.Turn(lateralAcceleration: 0.3, yawRate: 0.02)
+        XCTAssertEqual(SpeedGridFilter.turnLikelihood(straight, speed: 30), 1)
     }
 
     func testStaleAndOutOfOrderVibrationObservationsAreRejected() throws {

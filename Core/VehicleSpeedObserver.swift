@@ -21,9 +21,11 @@ public struct VibrationSpeedObservation: Codable, Sendable {
     public let rollingLevel: Double?
     public let movingProbability: Double?
     public let wheelbase: Double
+    /// Learned tyre circumference ÷ wheelbase; nil until learned in this drive.
+    public let tyreRatio: Double?
 
     public init(time: Double, speed: Double, uncertainty: Double, stoppedProbability: Double, accelerationBias: Double,
-                echoStrength: Double, rollingLevel: Double?, movingProbability: Double?, wheelbase: Double) {
+                echoStrength: Double, rollingLevel: Double?, movingProbability: Double?, wheelbase: Double, tyreRatio: Double? = nil) {
         self.time = time
         self.speed = speed
         self.uncertainty = uncertainty
@@ -33,6 +35,7 @@ public struct VibrationSpeedObservation: Codable, Sendable {
         self.rollingLevel = rollingLevel
         self.movingProbability = movingProbability
         self.wheelbase = wheelbase
+        self.tyreRatio = tyreRatio
     }
 }
 
@@ -113,23 +116,54 @@ final class AxleEchoAnalyzer {
         case accelerationX, accelerationY, accelerationZ, rotationX, rotationY, rotationZ, vertical
     }
     /// Correlated channel pairs (the first lags the second), with their sign
-    /// and weight. All eleven showed the echo with a consistent sign in seven
-    /// independent Kyiv drives; the weights are their stacked signal-to-noise.
+    /// and weight. Engine 3.6 keeps the six channels correlated with
+    /// themselves: on 10 GPS-referenced drives their echo peaks sat within 1%
+    /// of the true delay, while cross-channel pairs peaked 2–15% away (the two
+    /// sensors respond to a bump with different phase) and lateral
+    /// acceleration 2–5% early, which read highway speed high. The weights are
+    /// the mean per-pair echo signature at the true delay; it was the same on
+    /// every drive and speed band (cosine 0.95–0.99).
     static let pairs: [(Channel, Channel, Double, Double)] = [
-        (.rotationY, .rotationY, 1, 17.4), (.accelerationX, .accelerationX, 1, 14.4),
-        (.vertical, .accelerationX, -1, 14.0), (.accelerationX, .accelerationZ, 1, 13.1),
-        (.accelerationZ, .accelerationZ, 1, 13.1), (.rotationZ, .rotationZ, 1, 12.5),
-        (.accelerationX, .vertical, -1, 11.6), (.vertical, .vertical, 1, 10.8),
-        (.accelerationY, .accelerationY, 1, 10.3), (.accelerationZ, .accelerationX, 1, 7.7),
-        (.rotationX, .rotationX, 1, 7.6)
+        (.accelerationX, .accelerationX, 1, 45.2), (.rotationZ, .rotationZ, 1, 41.3),
+        (.vertical, .vertical, 1, 35.6), (.rotationY, .rotationY, 1, 31.8),
+        (.rotationX, .rotationX, 1, 27.5), (.accelerationZ, .accelerationZ, 1, 24.4)
     ]
+    /// Narrow spectral lines are capped at this multiple of the median power
+    /// within ±2 Hz before whitening. An engine order (12.3 Hz while crawling
+    /// at 30 km/h, 190 times the median) correlates at fixed delays every
+    /// 81 ms and held vibration speed near 85 km/h; capping, unlike removing
+    /// the bins, leaves no comb artifact and keeps broadband echo energy.
+    static let lineCap = 8.0
+    static let lineNeighbourhood = 20
+    static let lineBlock = 5
+    /// Below this window-centre speed the window is not resampled to
+    /// distance: speed changes are then a large share of speed, and the
+    /// echo is rarely measurable anyway.
+    static let distanceMinimumSpeed = 3.0
 
-    private var buffers = Array(repeating: [Double](repeating: 0, count: AxleEchoAnalyzer.window), count: 7)
+    /// Median by insertion sort into a small buffer; windows here hold at
+    /// most nine values.
+    static func median(of values: ArraySlice<Double>) -> Double {
+        var sorted: [Double] = []
+        sorted.reserveCapacity(values.count)
+        for value in values {
+            var index = sorted.count
+            while index > 0 && sorted[index - 1] > value {
+                index -= 1
+            }
+            sorted.insert(value, at: index)
+        }
+        return sorted.isEmpty ? 0 : sorted[sorted.count / 2]
+    }
+
+    /// Seven vibration channels, then integrated forward acceleration (m/s)
+    /// for resampling the window to distance.
+    private var buffers = Array(repeating: [Double](repeating: 0, count: AxleEchoAnalyzer.window), count: 8)
     private var head = 0
     private(set) var count = 0
     private var gridTime: Double?
     private var previousTime = 0.0
-    private var previousValues = [Double](repeating: 0, count: 7)
+    private var previousValues = [Double](repeating: 0, count: 8)
     private let transform = RadixTwoFFT(size: AxleEchoAnalyzer.transformSize)
     private let fineTransform = RadixTwoFFT(size: AxleEchoAnalyzer.fineTransformSize)
     private let rollingTransform = RadixTwoFFT(size: AxleEchoAnalyzer.rollingTransformSize)
@@ -153,7 +187,7 @@ final class AxleEchoAnalyzer {
     }
 
     func reset() {
-        buffers = Array(repeating: [Double](repeating: 0, count: Self.window), count: 7)
+        buffers = Array(repeating: [Double](repeating: 0, count: Self.window), count: 8)
         head = 0
         count = 0
         gridTime = nil
@@ -183,7 +217,7 @@ final class AxleEchoAnalyzer {
     }
 
     private func push(_ values: [Double]) {
-        for channel in 0..<7 {
+        for channel in 0..<min(8, values.count) {
             buffers[channel][head] = values[channel]
         }
         head = (head + 1) % Self.window
@@ -199,16 +233,30 @@ final class AxleEchoAnalyzer {
     }
 
     /// Weighted whitened correlation over lags 0..<maximumLag, with
-    /// `lagResolution` values per 10 ms step.
-    func correlation() -> [Double]? {
+    /// `lagResolution` values per 10 ms step. With the current speed, the
+    /// window is first resampled to equal distance steps (see
+    /// `distanceSamples`), so a lag still reads as time at the window-centre
+    /// speed.
+    func correlation(currentSpeed: Double? = nil) -> [Double]? {
         guard count >= Self.window else {
             return nil
+        }
+        let positions = currentSpeed.flatMap { speed in
+            return distanceSamples(currentSpeed: speed)
         }
         var spectraReal: [[Double]] = []
         var spectraImaginary: [[Double]] = []
         var powers: [[Double]] = []
         for channel in 0..<7 {
-            let values = recent(channel, Self.window)
+            var values = recent(channel, Self.window)
+            if let positions {
+                let source = values
+                values = positions.map { position in
+                    let index = min(Self.window - 2, max(0, Int(position)))
+                    let fraction = min(1, max(0, position - Double(index)))
+                    return source[index] * (1 - fraction) + source[index + 1] * fraction
+                }
+            }
             let mean = values.reduce(0, +) / Double(values.count)
             var real = [Double](repeating: 0, count: Self.transformSize)
             var imaginary = [Double](repeating: 0, count: Self.transformSize)
@@ -230,6 +278,30 @@ final class AxleEchoAnalyzer {
             // windows carry about six orders of magnitude more band energy.
             guard power.reduce(0, +) > Self.minimumBandEnergy else {
                 return nil
+            }
+            // Local level within ±2 Hz: the median of 5-bin block medians,
+            // which a cluster of line bins cannot raise and which avoids
+            // sorting a 41-bin window for every bin.
+            let first = band.lowerBound
+            let blockCount = (band.count + Self.lineBlock - 1) / Self.lineBlock
+            var blockMedians = [Double](repeating: 0, count: blockCount)
+            for block in 0..<blockCount {
+                let start = first + block * Self.lineBlock
+                let end = min(band.upperBound, start + Self.lineBlock - 1)
+                blockMedians[block] = Self.median(of: power[start...end])
+            }
+            let reach = Self.lineNeighbourhood / Self.lineBlock
+            let original = power
+            for bin in band {
+                let block = (bin - first) / Self.lineBlock
+                let level = Self.median(of: blockMedians[max(0, block - reach)...min(blockCount - 1, block + reach)])
+                let limit = Self.lineCap * level
+                if original[bin] > limit {
+                    let scale = sqrt(limit / original[bin])
+                    real[bin] *= scale
+                    imaginary[bin] *= scale
+                    power[bin] = limit
+                }
             }
             spectraReal.append(real)
             spectraImaginary.append(imaginary)
@@ -273,6 +345,59 @@ final class AxleEchoAnalyzer {
         }
     }
 
+    /// Fractional sample positions that resample the window to equal steps of
+    /// the window-centre speed × 10 ms along the road, from the integrated
+    /// forward acceleration in channel 7. The axle echo is a fixed distance,
+    /// so it stays one sharp peak while the car speeds up or brakes, whereas
+    /// engine lines and mount resonances, fixed in time, smear. On an
+    /// interchange approach where an engine line had held vibration speed
+    /// near 85 km/h at about 30, this lowered the median reading on the
+    /// straight from 35 to 21 km/h. Nil when the speed is too low or changes
+    /// by less than 2% within the window.
+    func distanceSamples(currentSpeed: Double) -> [Double]? {
+        guard count >= Self.window else {
+            return nil
+        }
+        let velocity = recent(7, Self.window)
+        let centre = Self.window / 2
+        let centreSpeed = currentSpeed - (velocity[Self.window - 1] - velocity[centre])
+        guard centreSpeed >= Self.distanceMinimumSpeed else {
+            return nil
+        }
+        let speeds = velocity.map { value in
+            return centreSpeed + value - velocity[centre]
+        }
+        let slowest = speeds.min() ?? 0
+        let fastest = speeds.max() ?? 0
+        guard slowest >= 0.5 * centreSpeed, fastest - slowest >= 0.02 * centreSpeed else {
+            return nil
+        }
+        var distance = [Double](repeating: 0, count: Self.window)
+        for index in 1..<Self.window {
+            distance[index] = distance[index - 1] + 0.5 * (speeds[index - 1] + speeds[index]) / Self.sampleRate
+        }
+        let step = centreSpeed / Self.sampleRate
+        var positions = [Double](repeating: 0, count: Self.window)
+        var source = 0
+        for index in 0..<Self.window {
+            let target = distance[centre] + Double(index - centre) * step
+            if target <= distance[0] {
+                positions[index] = 0
+                continue
+            }
+            if target >= distance[Self.window - 1] {
+                positions[index] = Double(Self.window - 1)
+                continue
+            }
+            while source < Self.window - 2 && distance[source + 1] < target {
+                source += 1
+            }
+            let span = distance[source + 1] - distance[source]
+            positions[index] = Double(source) + (span > 0 ? (target - distance[source]) / span : 0)
+        }
+        return positions
+    }
+
     /// Mean log10 median broadband power (3–45 Hz) of the six device axes over
     /// the last second. A median ignores the narrow engine-idle lines.
     func rollingLevel() -> Double? {
@@ -300,6 +425,83 @@ final class AxleEchoAnalyzer {
             total += log10(median + 1e-14)
         }
         return total / 6
+    }
+}
+
+/// Tyre circumference ÷ wheelbase, learned while driving. A tyre is never
+/// perfectly round or balanced, so the car shakes once per wheel revolution
+/// and the correlation repeats every circumference / speed. On field drives
+/// of one car that period sat at 0.785 axle delays at every speed, and at
+/// 110–120 km/h, where the axle echo is weak, it was read as the echo:
+/// vibration speed held 135–140 km/h. Once the ratio is known, that
+/// repetition is evidence for the true speed instead.
+///
+/// Each window where the echo is strong at a confident speed adds the
+/// correlation at r and 2r axle delays for every candidate ratio r. The echo
+/// peak's own ripples sit at fixed times beside it, so at one steady speed
+/// they too repeat at a fixed ratio: a synthetic cruise without any tyre
+/// vibration learned 0.745. The tyre's ratio is the same at every speed, the
+/// ripples' is not, so windows are pooled per 2 m/s band, each band weighs
+/// the same, and three bands must each peak within 0.02 of the pooled ratio.
+/// On 11 field drives with enough such windows every band from 12 to 22 m/s
+/// peaked at 0.775–0.815 and the pooled ratio was 0.785–0.805. Above 24 m/s
+/// the tyre period lies within 20 ms of the echo and its bands peaked at the
+/// range ends, so they are not used.
+struct TyreRatioEvidence {
+    /// 0.55–0.90: typical tyres are 1.9–2.4 m around and wheelbases 2.4–3.1 m;
+    /// above 0.9 the echo peak itself would be counted.
+    static let ratios = (0...70).map { Double($0) * 0.005 + 0.55 }
+    static let bands = stride(from: 12.0, to: 24.0, by: 2.0).map { $0 }
+    static let requiredWindows = 120
+    static let requiredBands = 3
+    static let bandWindows = 20
+    static let bandAgreement = 0.02
+    /// The best ratio's mean correlation must stand this many noise units
+    /// above the median ratio's.
+    static let requiredMargin = 1.0
+    private(set) var sums = [[Double]](repeating: [Double](repeating: 0, count: TyreRatioEvidence.ratios.count),
+                                       count: TyreRatioEvidence.bands.count)
+    private(set) var counts = [Int](repeating: 0, count: TyreRatioEvidence.bands.count)
+
+    var windows: Int {
+        return counts.reduce(0, +)
+    }
+
+    var ratio: Double? {
+        let full = counts.indices.filter { band in
+            return counts[band] >= Self.bandWindows
+        }
+        guard windows >= Self.requiredWindows, full.count >= Self.requiredBands else {
+            return nil
+        }
+        let means = Self.ratios.indices.map { index in
+            return full.reduce(0) { total, band in
+                return total + sums[band][index] / Double(counts[band])
+            } / Double(full.count)
+        }
+        guard let best = means.indices.max(by: { means[$0] < means[$1] }),
+              means[best] - SpeedGridFilter.median(means) >= Self.requiredMargin else {
+            return nil
+        }
+        let agreeing = full.filter { band in
+            guard let peak = sums[band].indices.max(by: { sums[band][$0] < sums[band][$1] }) else {
+                return false
+            }
+            return abs(Self.ratios[peak] - Self.ratios[best]) <= Self.bandAgreement + 1e-9
+        }
+        return agreeing.count >= Self.requiredBands ? Self.ratios[best] : nil
+    }
+
+    /// `correlation(lag)` is the residual correlation in noise units, nil
+    /// beyond the analysed lags; `delay` is the echo delay in lag steps.
+    mutating func add(speed: Double, delay: Double, correlation: (Double) -> Double?) {
+        guard speed < Self.bands[Self.bands.count - 1] + 2, let band = Self.bands.lastIndex(where: { $0 <= speed }) else {
+            return
+        }
+        for (index, ratio) in Self.ratios.enumerated() {
+            sums[band][index] += (correlation(ratio * delay) ?? 0) + (correlation(2 * ratio * delay) ?? 0)
+        }
+        counts[band] += 1
     }
 }
 
@@ -334,7 +536,40 @@ final class SpeedGridFilter {
     /// axle delay, and its first tooth held the speed 1.2–1.36 times too high
     /// for up to a minute at 45–60 km/h. Evidence at a delay is reduced by
     /// this multiple of the mean positive evidence at twice and three times it.
-    static let repeatPenalty = 2.0
+    /// Engine 3.4 used 2; with tyre evidence (engine 3.7) a weight fitted to
+    /// GPS speed on 13 drives was 1.0–1.3, and 1.3 halved the time with speed
+    /// more than 10 km/h off on the highway drive.
+    static let repeatPenalty = 1.3
+    /// Tyre-period evidence, relative to the echo, once the ratio is learned.
+    /// A logistic fit to GPS speed on 13 drives gave 0.6. It applies only
+    /// while the predicted speed is above `tyreSpeeds`: crawling at 30 km/h
+    /// with an engine line every 81 ms, a known ratio otherwise read the line
+    /// as the tyre period of 98 km/h. It is exempt from the highway share,
+    /// because above 90 km/h the tyre period is the stronger evidence.
+    static let tyreShare = 0.5
+    static let tyreSpeeds = 12.0...16.0
+    /// Windows that teach the tyre ratio: confident speed, and an echo peak of
+    /// at least `tyreLearningEcho` noise units within −5%/+8% of its delay.
+    static let tyreLearningSpread = 0.6
+    static let tyreLearningEcho = 3.0
+    /// A car turning at yaw rate ω with speed v accelerates v·ω sideways,
+    /// independently of vibration. In turns above 0.1 rad/s (5.7°/s) on
+    /// GPS-logged drives, lateral acceleration ÷ yaw rate gave a median 0.99
+    /// times GPS speed with a residual of about 0.3 m/s², growing with the
+    /// yaw rate. On an interchange ramp driven at 30 km/h it showed a
+    /// vibration speed of 110 km/h to be false. The z-score is capped at 3
+    /// because turn entries and exits, where lateral acceleration lags the
+    /// yaw rate, gave about one outlier in ten.
+    static let centripetalMinimumYawRate = 0.1
+
+    static func turnLikelihood(_ turn: Turn, speed: Double) -> Double {
+        guard abs(turn.yawRate) >= centripetalMinimumYawRate else {
+            return 1
+        }
+        let sigma = 0.25 + 0.6 * abs(turn.yawRate)
+        let z = (turn.lateralAcceleration - speed * turn.yawRate) / sigma
+        return exp(-0.5 * min(9, z * z))
+    }
     static let biases = (0...40).map { Double($0 - 20) * 0.04 }
     static let hop = 0.5
     static let movingFloor = 0.1
@@ -351,6 +586,7 @@ final class SpeedGridFilter {
     private var rollingHistory: [Double] = []
     /// Velocity changes and durations since the echo window's centre.
     private var recentMotion: [(velocityChange: Double, duration: Double)] = []
+    private(set) var tyreEvidence = TyreRatioEvidence()
     private let lagIndex: [Int]
     private let lagFraction: [Double]
     private let echoSupported: [Bool]
@@ -407,6 +643,10 @@ final class SpeedGridFilter {
         background = nil
     }
 
+    func resetTyreEvidence() {
+        tyreEvidence = TyreRatioEvidence()
+    }
+
     /// A gravity correction changed the processed acceleration by `delta`.
     /// The physical bias is unchanged, so every bias hypothesis moves with it.
     func shiftBias(by delta: Double) {
@@ -423,6 +663,13 @@ final class SpeedGridFilter {
         normalize()
     }
 
+    /// Mean lateral acceleration (m/s², right positive) and yaw rate (rad/s,
+    /// clockwise positive) over the update interval.
+    struct Turn {
+        let lateralAcceleration: Double
+        let yawRate: Double
+    }
+
     struct Posterior {
         let speed: Double
         let uncertainty: Double
@@ -430,9 +677,11 @@ final class SpeedGridFilter {
         let bias: Double
         let echoStrength: Double
         let movingProbability: Double?
+        let tyreRatio: Double?
     }
 
-    func update(velocityChange: Double, duration: Double, correlation: [Double]?, rollingLevel: Double?, baseline: Double?) -> Posterior {
+    func update(velocityChange: Double, duration: Double, correlation: [Double]?, rollingLevel: Double?, baseline: Double?,
+                turn: Turn? = nil) -> Posterior {
         var next = [Double](repeating: 0, count: probability.count)
         for column in 0..<biasCount {
             let shift = velocityChange - Self.biases[column] * duration
@@ -471,12 +720,14 @@ final class SpeedGridFilter {
         var echoLikelihood: [Double]?
         var likelihood = [Double](repeating: 1, count: speedCount)
         var echoStrength = 0.0
+        var learning: (residual: [Double], noise: Double)?
         if let correlation {
             if let background {
                 let residual = zip(correlation, background).map { value, reference in
                     return value - reference
                 }
-                let gain = echoGain * echoScale(next)
+                let predicted = Self.meanSpeed(next)
+                let ratio = tyreEvidence.ratio
                 let tail = residual[(10 * AxleEchoAnalyzer.lagResolution)...]
                 let mean = tail.reduce(0, +) / Double(tail.count)
                 let noise = sqrt(tail.reduce(0) { total, value in
@@ -487,7 +738,8 @@ final class SpeedGridFilter {
                 var peak = -Double.infinity
                 for row in 0..<speedCount {
                     let value = (1 - lagFraction[row]) * residual[lagIndex[row]] + lagFraction[row] * residual[lagIndex[row] + 1]
-                    scores[row] = clamp(gain * echoEvidence(residual, row: row) / noise, -20, 20)
+                    let evidence = rowEvidence(residual, row: row, predictedSpeed: predicted, tyreRatio: ratio)
+                    scores[row] = clamp(evidence / noise, -20, 20)
                     if echoSupported[row] {
                         supportedScores.append(scores[row])
                         peak = max(peak, value / noise)
@@ -506,6 +758,7 @@ final class SpeedGridFilter {
                     }
                 }
                 echoLikelihood = aligned
+                learning = (residual, noise)
             }
             if let previous = background {
                 background = zip(previous, correlation).map { reference, value in
@@ -534,6 +787,11 @@ final class SpeedGridFilter {
                 likelihood[row] *= Self.speeds[row] < 0.3 ? 1 - moving + 1e-3 : max(moving, Self.movingFloor) + 1e-3
             }
         }
+        if let turn {
+            for row in 0..<speedCount {
+                likelihood[row] *= Self.turnLikelihood(turn, speed: Self.speeds[row])
+            }
+        }
         for row in 0..<speedCount {
             for column in 0..<biasCount {
                 next[row * biasCount + column] *= likelihood[row] * (echoLikelihood?[row * biasCount + column] ?? 1)
@@ -559,8 +817,79 @@ final class SpeedGridFilter {
                 stopped += mass
             }
         }
-        return Posterior(speed: mean, uncertainty: sqrt(max(0, square - mean * mean)), stoppedProbability: stopped,
-                         bias: bias, echoStrength: echoStrength, movingProbability: movingProbability)
+        let spread = sqrt(max(0, square - mean * mean))
+        if let learning, spread <= Self.tyreLearningSpread, stopped < 0.01 {
+            // The echo window is centred two seconds back.
+            let centreSpeed = mean - (changeSinceCentre - bias * timeSinceCentre)
+            learnTyreRatio(learning.residual, noise: learning.noise, centreSpeed: centreSpeed)
+        }
+        return Posterior(speed: mean, uncertainty: spread, stoppedProbability: stopped,
+                         bias: bias, echoStrength: echoStrength, movingProbability: movingProbability, tyreRatio: tyreEvidence.ratio)
+    }
+
+    /// Adds a window to the tyre-ratio evidence when the echo is strong near
+    /// the delay of the confident centre speed.
+    private func learnTyreRatio(_ residual: [Double], noise: Double, centreSpeed: Double) {
+        guard centreSpeed >= Self.tyreSpeeds.lowerBound else {
+            return
+        }
+        func correlation(_ lag: Double) -> Double? {
+            guard lag >= 0, lag < Double(residual.count - 2) else {
+                return nil
+            }
+            let index = Int(lag)
+            let fraction = lag - Double(index)
+            return ((1 - fraction) * residual[index] + fraction * residual[index + 1]) / noise
+        }
+        let expected = wheelbase / centreSpeed * AxleEchoAnalyzer.sampleRate * Double(AxleEchoAnalyzer.lagResolution)
+        var delay = expected
+        var strongest = -Double.infinity
+        for lag in Int(expected * 0.95)...Int(expected * 1.08) {
+            if let value = correlation(Double(lag)), value > strongest {
+                strongest = value
+                delay = Double(lag)
+            }
+        }
+        guard strongest >= Self.tyreLearningEcho else {
+            return
+        }
+        tyreEvidence.add(speed: centreSpeed, delay: delay, correlation: correlation)
+    }
+
+    /// Mean residual correlation at one and two tyre periods of a speed row.
+    func tyreEvidence(_ residual: [Double], row: Int, ratio: Double) -> Double {
+        guard echoSupported[row] else {
+            return 0
+        }
+        let ramp = clamp((Self.speeds[row] - Self.tyreSpeeds.lowerBound) / (Self.tyreSpeeds.upperBound - Self.tyreSpeeds.lowerBound), 0, 1)
+        guard ramp > 0 else {
+            return 0
+        }
+        var total = 0.0
+        var count = 0
+        for multiple in [1.0, 2.0] {
+            let lag = echoLags[row] * ratio * multiple
+            guard lag < Double(residual.count - 2) else {
+                continue
+            }
+            let index = Int(lag)
+            let fraction = lag - Double(index)
+            total += (1 - fraction) * residual[index] + fraction * residual[index + 1]
+            count += 1
+        }
+        return count > 0 ? ramp * total / Double(count) : 0
+    }
+
+    /// Weighted evidence for a speed row before noise normalisation: the axle
+    /// echo, tempered by the predicted speed, plus the tyre period once its
+    /// ratio is known and the predicted speed is high enough.
+    func rowEvidence(_ residual: [Double], row: Int, predictedSpeed: Double, tyreRatio: Double?) -> Double {
+        var evidence = echoGain * echoScale(predictedSpeed) * echoEvidence(residual, row: row)
+        let tyre = clamp((predictedSpeed - Self.tyreSpeeds.lowerBound) / (Self.tyreSpeeds.upperBound - Self.tyreSpeeds.lowerBound), 0, 1)
+        if let tyreRatio, tyre > 0 {
+            evidence += Self.tyreShare * echoGain * tyre * tyreEvidence(residual, row: row, ratio: tyreRatio)
+        }
+        return evidence
     }
 
     /// Residual correlation at a speed row's axle delay, less what repeats at
@@ -591,17 +920,21 @@ final class SpeedGridFilter {
         return count > 0 ? max(0, total / Double(count)) : 0
     }
 
-    /// Echo weight for the predicted mean speed.
-    private func echoScale(_ predicted: [Double]) -> Double {
+    private static func meanSpeed(_ grid: [Double]) -> Double {
+        let biasCount = biases.count
         var total = 0.0
         var mean = 0.0
-        for row in 0..<speedCount {
+        for row in 0..<speeds.count {
             for column in 0..<biasCount {
-                total += predicted[row * biasCount + column]
-                mean += predicted[row * biasCount + column] * Self.speeds[row]
+                total += grid[row * biasCount + column]
+                mean += grid[row * biasCount + column] * speeds[row]
             }
         }
-        let speed = total > 0 ? mean / total : 0
+        return total > 0 ? mean / total : 0
+    }
+
+    /// Echo weight for the predicted mean speed.
+    private func echoScale(_ speed: Double) -> Double {
         let highway = Self.highwayEchoSpeeds
         let fast = clamp((speed - highway.lowerBound) / (highway.upperBound - highway.lowerBound), 0, 1)
         let low = Self.lowSpeedEchoSpeeds
@@ -703,6 +1036,7 @@ final class VehicleSpeedObserver {
     /// Parked field phones read about −7.6 (log10 median power); an idealized
     /// noise-free signal reads −14. Below this a sensor offers no vibration evidence.
     static let silentLevel = -12.0
+    static let distanceMaximumSpread = 3.0
     let wheelbase: Double
     private let analyzer = AxleEchoAnalyzer()
     private let filter: SpeedGridFilter
@@ -729,7 +1063,8 @@ final class VehicleSpeedObserver {
     func receive(time: Double, totalAcceleration: SIMD3<Double>, rotation: SIMD3<Double>, gravity: SIMD3<Double>) {
         let up = -simd_normalize(gravity)
         analyzer.append(time: time, values: [totalAcceleration.x, totalAcceleration.y, totalAcceleration.z,
-                                             rotation.x, rotation.y, rotation.z, simd_dot(totalAcceleration, up)])
+                                             rotation.x, rotation.y, rotation.z, simd_dot(totalAcceleration, up),
+                                             integratedVelocity])
     }
 
     /// Parked vibration level, sampled every half second during calibration.
@@ -768,17 +1103,32 @@ final class VehicleSpeedObserver {
         accelerationBias = 0
     }
 
-    /// A reused calibration keeps the baseline but restarts parked.
+    /// A reused calibration keeps the baseline but restarts parked. The tyre
+    /// ratio is learned again, as it is when a recording replays from its
+    /// reused calibration row.
     func beginSession() {
         analyzer.reset()
+        integratedVelocity = 0
+        filter.resetTyreEvidence()
         completeCalibration(start: .infinity, end: .infinity)
     }
 
-    func accumulate(forwardAcceleration: Double, duration: Double) {
+    private var lateralChange = 0.0
+    private var yawChange = 0.0
+    private var turnDuration = 0.0
+    /// Forward acceleration less the estimated bias, integrated; only its
+    /// changes within the four-second echo window are used.
+    private var integratedVelocity = 0.0
+
+    func accumulate(forwardAcceleration: Double, lateralAcceleration: Double = 0, yawRate: Double = 0, duration: Double) {
+        integratedVelocity += (forwardAcceleration - accelerationBias) * duration
         guard nextUpdate != nil else {
             return
         }
         velocityChange += forwardAcceleration * duration
+        lateralChange += lateralAcceleration * duration
+        yawChange += yawRate * duration
+        turnDuration += duration
     }
 
     /// Without a physical parked vibration reference there is no independent
@@ -800,6 +1150,9 @@ final class VehicleSpeedObserver {
             nextUpdate = time + SpeedGridFilter.hop
             lastUpdate = time
             velocityChange = 0
+            lateralChange = 0
+            yawChange = 0
+            turnDuration = 0
             return nil
         }
         guard time >= scheduled else {
@@ -808,9 +1161,19 @@ final class VehicleSpeedObserver {
         filter.shiftBias(by: pendingBiasShift)
         pendingBiasShift = 0
         let level = analyzer.rollingLevel()
+        var turn: SpeedGridFilter.Turn?
+        if turnDuration > 0 {
+            turn = SpeedGridFilter.Turn(lateralAcceleration: lateralChange / turnDuration, yawRate: yawChange / turnDuration)
+        }
+        // The distance resampling needs a speed that is roughly right; a wide
+        // posterior (two modes) would stretch the window by the wrong factor.
+        let reference = uncertainty <= Self.distanceMaximumSpread ? speed : nil
         let posterior = filter.update(velocityChange: velocityChange, duration: time - lastUpdate,
-                                      correlation: analyzer.correlation(), rollingLevel: level,
-                                      baseline: baseline)
+                                      correlation: analyzer.correlation(currentSpeed: reference), rollingLevel: level,
+                                      baseline: baseline, turn: turn)
+        lateralChange = 0
+        yawChange = 0
+        turnDuration = 0
         speed = posterior.speed
         uncertainty = posterior.uncertainty
         stoppedProbability = posterior.stoppedProbability
@@ -828,6 +1191,7 @@ final class VehicleSpeedObserver {
         return VibrationSpeedObservation(time: time, speed: posterior.speed, uncertainty: posterior.uncertainty,
                                          stoppedProbability: posterior.stoppedProbability, accelerationBias: posterior.bias,
                                          echoStrength: posterior.echoStrength, rollingLevel: rollingLevel,
-                                         movingProbability: posterior.movingProbability, wheelbase: wheelbase)
+                                         movingProbability: posterior.movingProbability, wheelbase: wheelbase,
+                                         tyreRatio: posterior.tyreRatio)
     }
 }
