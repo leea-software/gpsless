@@ -147,6 +147,52 @@ final class VehicleMotionProcessorTests: XCTestCase {
         XCTAssertTrue(producedSample)
     }
 
+    /// A drive that reuses the app's calibration records it, and a replay
+    /// resuming from that row must process the drive exactly as the phone did.
+    func testRecordedReusedCalibrationResumesIdentically() throws {
+        let original = VehicleMotionProcessor()
+        let gravity = simd_normalize(SIMD3<Double>(0.02, -0.86, -0.5))
+        var road = SyntheticRoadVibration(wheelbase: original.wheelbase)
+        var speed = 0.0
+        for tick in 0...6000 {
+            let time = Double(tick) * 0.01
+            let acceleration = time > 10 && time < 20 ? 1.0 : 0
+            speed += acceleration * 0.01
+            road.advance(speed: speed, duration: 0.01)
+            let vibration = road.sample()
+            let idle = SIMD3<Double>(0, 0.004 * sin(time * 26 * .pi), 0.002 * sin(time * 52 * .pi))
+            let forward = SIMD3<Double>(0, 0, acceleration / 9.80665)
+            _ = original.receive(raw(time: time, total: gravity + forward + vibration.acceleration + idle,
+                                     gravity: gravity, rotation: vibration.rotation))
+        }
+        XCTAssertTrue(original.calibrated)
+        let recorded = try XCTUnwrap(original.reusedCalibration())
+        XCTAssertEqual(recorded.reason, "reused")
+        XCTAssertNotNil(recorded.vibrationBaseline)
+        let decoded = try JSONDecoder().decode(CalibrationRecord.self, from: JSONEncoder().encode(recorded))
+        let resumed = VehicleMotionProcessor()
+        XCTAssertTrue(resumed.resume(from: decoded))
+        original.beginSession(reusingCalibration: true)
+        var compared = 0
+        for tick in 0...3000 {
+            let time = 200 + Double(tick) * 0.01
+            let acceleration = tick > 500 && tick < 1500 ? 1.0 : 0
+            speed = tick == 0 ? 0 : speed + acceleration * 0.01
+            road.advance(speed: speed, duration: 0.01)
+            let vibration = road.sample()
+            let frame = raw(time: time, total: gravity + SIMD3(0, 0, acceleration / 9.80665) + vibration.acceleration,
+                            gravity: gravity, rotation: vibration.rotation)
+            let expected = original.receive(frame)
+            let actual = resumed.receive(frame)
+            XCTAssertEqual(expected.sample?.forwardAcceleration, actual.sample?.forwardAcceleration)
+            XCTAssertEqual(expected.speedObservation?.speed, actual.speedObservation?.speed)
+            if expected.speedObservation != nil {
+                compared += 1
+            }
+        }
+        XCTAssertGreaterThan(compared, 40)
+    }
+
     func testThreeAxisGyroCalibrationTracksRealRotationWithoutCreatingAcceleration() throws {
         let processor = VehicleMotionProcessor()
         let bias = SIMD3<Double>(0.002, -0.003, 0.004)

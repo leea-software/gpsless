@@ -61,6 +61,10 @@ struct CalibrationRecord: Codable {
     var measuredGyroBias: [Double]? = nil
     /// Standard error in vehicle right, up and forward axes, in rad/s.
     var gyroBiasStandardErrorVehicle: [Double]? = nil
+    /// Parked idle vibration level the speed observer measures against; nil
+    /// when the parked interval was silent. Recorded from 0.4.2 so a drive that
+    /// reuses the calibration replays without its predecessor.
+    var vibrationBaseline: Double? = nil
 }
 
 /// Written only by the September 15 engine 2.1 route-gate builds. The gate was

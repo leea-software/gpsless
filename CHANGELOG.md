@@ -2,6 +2,17 @@
 
 Engine versions are recorded in every drive recording (`engineVersion`).
 
+## 0.4.2 (build 28)
+
+- Engine 3.4 `3.4.0-repeat-rejection`: road-bump speed no longer mistakes tyre vibration, which repeats every wheel revolution, for the axle echo; that false echo held the speed 1.2–1.36 times too high for up to a minute at 45–60 km/h. Below 20 km/h, where the echo is rarely measurable, it counts for less, and a speed measurement that is unsure (two modes, wide spread) no longer drags the car's speed toward its average: in a slow turn that had shown 110 km/h at 30 km/h. On 11 GPS-logged drives the time with speed more than 10 km/h off fell from 9.2% to 6.8%.
+- The **±** figure and the map circle show the typical position error, half the engine's outer bound; "Position uncertain" appears once that passes 45 m. The outer bound itself grows as before: replays showed slower growth would miss real errors.
+- Drives that reuse the app's calibration record it, so they replay without the previous drive; the Mac replay tool rebuilds it from the previous recording for older drives.
+
+## 0.4.1 (build 27)
+
+- Sharing a place from Google Maps to GPSLess now closes the search sheet it was opened from, so the new point A or B is visible; before, it was set behind the sheet and the app seemed to do nothing.
+- Street results in search use a round badge like the other results.
+
 ## 0.4.0 (build 26)
 
 - Engine 3.3 `3.3.0-highway-echo`: road-bump speed works above 100 km/h. The axle echo is used down to 0.06 s delay and measured at 2.5 ms steps; above 90 km/h, where the echo weakens and repeating wheel and drivetrain vibration mimics it, its weight falls so a false echo cannot drag the speed down (on a highway drive the worst tenth of readings above 105 km/h was 65–80 km/h too low; now 9–15 km/h). A match that would move the car far outside its uncertainty now waits for a second turn unless the alternatives are clearly excluded. A U-turn where the route itself turns round no longer stops tracking when it is driven differently from the mapped turnaround.

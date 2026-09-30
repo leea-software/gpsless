@@ -58,6 +58,8 @@ public struct TrackingEstimate: Codable, Sendable {
     public var coordinate: Coordinate
     public var heading: Double
     public var speed: Double
+    /// Outer radius along the road: on GPS-logged drives the error stayed
+    /// within it for 95% of moving time. Route matching and resets use it.
     public var uncertainty: Double
     public var roadProbability: Double
     public var status: String
@@ -67,6 +69,14 @@ public struct TrackingEstimate: Codable, Sendable {
     public var alternatives: [Coordinate]
     public var needsReset: Bool
     public var failure: TrackingFailure? = nil
+
+    /// The radius shown to the driver: half the outer radius, which held the
+    /// error for 84% of moving time on the same drives. It reads like a phone
+    /// GPS accuracy, which is a 68% radius; the outer one looked far worse
+    /// than the position usually was.
+    public var typicalError: Double {
+        return uncertainty * 0.5
+    }
 }
 
 private struct Particle {
@@ -213,7 +223,7 @@ struct TurnObservation {
 
 /// A bounded road-constrained particle filter. No location or network inputs exist.
 public final class TrackingEngine {
-    static let version = "3.3.0-highway-echo"
+    static let version = "3.4.0-repeat-rejection"
     public let graph: RoadGraph
     public private(set) var estimate: TrackingEstimate?
     /// Speed corrections from road bumps since start, counted once per
@@ -221,6 +231,12 @@ public final class TrackingEngine {
     public private(set) var speedCorrectionCount = 0
     public private(set) var lastSpeedCorrection: SpeedCorrection?
     public static let speedCorrectionThreshold = 5 / 3.6
+    /// Vibration speed spread (m/s) up to which it pulls hypotheses fully.
+    static let confidentVibrationSigma = 1.0
+    /// "Position uncertain" above this outer radius, i.e. a typical error
+    /// above 45 m. At the former 45 m outer radius the status showed for 92%
+    /// of moving time on GPS-logged drives, when the error exceeded 50 m in 22%.
+    static let uncertainStatusRadius = 90.0
     private var speedDisagreementActive = false
     private var particles: [Particle] = []
     private var random: SeededRandom
@@ -693,7 +709,7 @@ public final class TrackingEngine {
         if total > 1e-200 && total.isFinite {
             for index in particles.indices {
                 particles[index].weight /= total
-                particles[index].speed = clamp(particles[index].speed + (observation.speed - particles[index].speed) * 0.1, 0, 65)
+                particles[index].speed = clamp(particles[index].speed + (observation.speed - particles[index].speed) * vibrationPull(sigma), 0, 65)
             }
         } else {
             // Every hypothesis disagreed: adopt the measurement instead of failing.
@@ -719,6 +735,15 @@ public final class TrackingEngine {
             }
         }
         return (true, "accepted_vibration_speed", before, after)
+    }
+
+    /// Share of the gap to the measured speed each hypothesis closes per
+    /// observation. It falls with the square of the measurement's spread: a
+    /// two-mode vibration posterior reports a mean between its modes with a
+    /// wide spread, and in a slow turn a fixed 10% pull toward such a mean
+    /// (75 ± 36 km/h) carried the engine from 30 to 110 km/h in eight seconds.
+    private func vibrationPull(_ sigma: Double) -> Double {
+        return 0.1 * min(1, pow(Self.confidentVibrationSigma / sigma, 2))
     }
 
     /// Stop needs one second of confident parked vibration; movement needs two
@@ -1519,7 +1544,7 @@ public final class TrackingEngine {
             if !started {
                 status = "Waiting for forward movement"
             }
-        } else if bestGroup.value < 0.65 || uncertainty > 45 || headingError > 0.45 {
+        } else if bestGroup.value < 0.65 || uncertainty > Self.uncertainStatusRadius || headingError > 0.45 {
             status = "Position uncertain"
         }
         if headingError > 0.8 && speed > 2 && route == nil {

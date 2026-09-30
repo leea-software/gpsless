@@ -162,6 +162,52 @@ final class VehicleSpeedObserverTests: XCTestCase {
         XCTAssertFalse(after.needsReset, after.status)
     }
 
+    /// In a slow turn the vibration filter held two modes and reported their
+    /// mean, 75 ± 36 km/h; a fixed 10% pull toward it carried the engine to
+    /// 110 km/h. Six such observations would close half the gap from 30 km/h;
+    /// a spread that wide must barely move the estimate.
+    func testWideVibrationSpeedBarelyMovesEngine() throws {
+        let engine = try engine()
+        var time = 0.0
+        for _ in 0..<167 {
+            _ = engine.process(MotionSample(time: time, forwardAcceleration: 1))
+            time += 0.05
+        }
+        let before = try XCTUnwrap(engine.estimate).speed
+        XCTAssertEqual(before, 30 / 3.6, accuracy: 0.8)
+        for tick in 0..<60 {
+            _ = engine.process(MotionSample(time: time, forwardAcceleration: 0))
+            if tick.isMultiple(of: 10) {
+                let result = engine.applyVibrationSpeed(observation(time: time, speed: 75 / 3.6, uncertainty: 36 / 3.6))
+                XCTAssertTrue(result.accepted, result.reason)
+            }
+            time += 0.05
+        }
+        XCTAssertEqual(try XCTUnwrap(engine.estimate).speed, before, accuracy: 1)
+    }
+
+    /// On field drives tyre vibration correlated at 0.785, 1.57 and 2.36 axle
+    /// delays, and its first tooth held the speed 1.27 times too high. With
+    /// the echo and that comb equally strong, the echo's speed must score and
+    /// the tooth's speed must not.
+    func testRepeatingWheelCombScoresBelowTheAxleEcho() throws {
+        let wheelbase = 2.85
+        let filter = SpeedGridFilter(wheelbase: wheelbase)
+        let speed = 13.8
+        let delay = wheelbase / speed * AxleEchoAnalyzer.sampleRate * Double(AxleEchoAnalyzer.lagResolution)
+        let period = 0.785 * delay
+        var residual = [Double](repeating: 0, count: AxleEchoAnalyzer.maximumLag * AxleEchoAnalyzer.lagResolution)
+        for centre in [delay, period, 2 * period, 3 * period] {
+            for index in residual.indices {
+                residual[index] += exp(-0.5 * pow((Double(index) - centre) / 3, 2))
+            }
+        }
+        let echoRow = try XCTUnwrap(SpeedGridFilter.speeds.firstIndex { abs($0 - speed) < 0.01 })
+        let toothRow = try XCTUnwrap(SpeedGridFilter.speeds.firstIndex { abs($0 - speed / 0.785) < 0.11 })
+        XCTAssertGreaterThan(filter.echoEvidence(residual, row: echoRow), 0.9)
+        XCTAssertLessThan(filter.echoEvidence(residual, row: toothRow), 0)
+    }
+
     func testStaleAndOutOfOrderVibrationObservationsAreRejected() throws {
         let engine = try engine()
         for tick in 0..<40 {

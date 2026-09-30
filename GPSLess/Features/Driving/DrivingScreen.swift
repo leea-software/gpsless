@@ -62,6 +62,13 @@ struct DrivingScreen: View {
         .onPreferenceChange(CardHeightKey.self) { height in
             cardHeight = height
         }
+        .onChange(of: store.sharedPlaceArrivals) {
+            // Coming back from Google Maps usually lands on the search sheet
+            // that opened it; the shared point is on the map behind it.
+            showSearch = false
+            showSettings = false
+            showStart = false
+        }
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: store.phase)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: store.speedCorrectionHint)
         .tint(Theme.accent)

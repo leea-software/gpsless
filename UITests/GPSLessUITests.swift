@@ -36,6 +36,25 @@ final class GPSLessUITests: XCTestCase {
         add(screenshot)
     }
 
+    func testSharedPlaceClosesSearchAndSetsStart() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-no-selection"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "startingPointRequest").firstMatch
+            .waitForExistence(timeout: 40))
+        app.buttons["openSearch"].tap()
+        XCTAssertTrue(app.buttons["openGoogleMaps"].waitForExistence(timeout: 5))
+        // What the share extension hands over after Share → GPSLess in Google Maps.
+        XCUIDevice.shared.system.open(URL(string: "gpsless://place?lat=50.450100&lon=30.523400&name=Shared%20pin")!)
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        let confirm = app.buttons["confirmStartingPoint"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        // The sheet keeps the map's buttons in the tree but covers them.
+        let uncovered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: confirm)
+        XCTAssertEqual(XCTWaiter.wait(for: [uncovered], timeout: 10), .completed)
+        XCTAssertFalse(app.buttons["openGoogleMaps"].exists)
+    }
+
     func testRouteRequiredAndLockedUntilStartingPointReset() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]

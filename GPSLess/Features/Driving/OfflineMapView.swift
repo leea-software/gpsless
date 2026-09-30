@@ -508,7 +508,7 @@ struct OfflineMapView: UIViewRepresentable {
             }
             if let estimate = store.estimate, store.phase != .selecting {
                 var ring: [CLLocationCoordinate2D] = []
-                let radius = min(350, estimate.uncertainty)
+                let radius = min(350, estimate.typicalError)
                 for index in 0...48 {
                     let angle = Double(index) / 48 * 2 * .pi
                     let point = Coordinate(metres: estimate.coordinate.metres + Vector2(sin(angle), cos(angle)) * radius)

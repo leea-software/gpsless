@@ -323,9 +323,9 @@ private struct TrackingCard: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 8) {
-                    let uncertainty = store.estimate?.uncertainty ?? 0
-                    StatusPill(text: "±\(Format.distance(uncertainty))", color: Theme.uncertainty(uncertainty), symbol: "scope")
-                        .accessibilityLabel("Position uncertainty \(Format.distance(uncertainty))")
+                    let typicalError = store.estimate?.typicalError ?? 0
+                    StatusPill(text: "±\(Format.distance(typicalError))", color: Theme.uncertainty(typicalError), symbol: "scope")
+                        .accessibilityLabel("Typical position error \(Format.distance(typicalError))")
                     Text(store.estimate?.status ?? "Tracking")
                         .font(.caption)
                         .foregroundStyle(Theme.tertiaryText)

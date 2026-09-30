@@ -20,12 +20,13 @@ enum Theme {
     static let cardRadius: CGFloat = 28
     static let controlRadius: CGFloat = 16
 
-    /// Colour for a position uncertainty radius in metres.
+    /// Colour for the typical position error in metres; amber from where the
+    /// engine reports "Position uncertain".
     static func uncertainty(_ metres: Double) -> Color {
-        if metres <= 60 {
+        if metres <= 45 {
             return accent
         }
-        if metres <= 250 {
+        if metres <= 125 {
             return warning
         }
         return danger

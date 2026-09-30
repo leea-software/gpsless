@@ -42,6 +42,7 @@ final class VehicleMotionProcessor {
     private var gyroBias = SIMD3<Double>.zero
     private var previous: RawMotion?
     private var calibrationTime = 0.0
+    private var lastCalibration: CalibrationRecord?
     private var accumulated: [(sample: MotionSample, duration: Double)] = []
     private var lastOutputTime: Double?
 
@@ -78,7 +79,41 @@ final class VehicleMotionProcessor {
             gravity = SIMD3<Double>(0, -1, 0)
             gyroBias = .zero
             calibrationTime = 0
+            lastCalibration = nil
         }
+    }
+
+    /// The calibration a reusing drive starts from, with the current gravity,
+    /// so its recording can be replayed without the drive that measured it.
+    func reusedCalibration() -> CalibrationRecord? {
+        guard calibrated, var record = lastCalibration else {
+            return nil
+        }
+        record.gravity = array(gravity)
+        record.gyroBias = array(gyroBias)
+        record.reason = "reused"
+        record.vibrationBaseline = speedObserver.baseline
+        return record
+    }
+
+    /// Replay counterpart of reusing the calibration: continues from a
+    /// recorded calibration instead of waiting for a parked interval.
+    @discardableResult
+    func resume(from record: CalibrationRecord) -> Bool {
+        guard let recordedGravity = record.gravity, recordedGravity.count == 3,
+              let recordedGyroBias = record.gyroBias, recordedGyroBias.count == 3,
+              simd_length(vector(recordedGravity)) > 0.5 else {
+            return false
+        }
+        gravity = simd_normalize(vector(recordedGravity))
+        gyroBias = vector(recordedGyroBias)
+        calibrationTime = record.end
+        lastCalibration = record
+        calibrated = true
+        calibrationFrames.removeAll(keepingCapacity: false)
+        speedObserver = VehicleSpeedObserver(wheelbase: wheelbase, baseline: record.vibrationBaseline)
+        beginSession(reusingCalibration: true)
+        return true
     }
 
     func receive(_ raw: RawMotion, magneticMagnitude: Double? = nil, relativeAltitude: Double? = nil) -> MotionProcessingUpdate {
@@ -140,6 +175,8 @@ final class VehicleMotionProcessor {
                 calibrated = update.calibration != nil
                 if calibrated {
                     speedObserver.completeCalibration(start: start, end: raw.time)
+                    update.calibration?.vibrationBaseline = speedObserver.baseline
+                    lastCalibration = update.calibration
                 } else {
                     update.failure = "Cannot establish mounted orientation · remount and calibrate"
                 }
@@ -277,12 +314,14 @@ final class VehicleMotionProcessor {
               simd_length(meanAcceleration) < 1.2 else {
             return nil
         }
-        guard let record = calibrate(recentFrames, reason: "confirmed-stop") else {
+        guard var record = calibrate(recentFrames, reason: "confirmed-stop") else {
             return nil
         }
         // Parked again with a new gravity reference: restart the speed filter
         // at zero with fresh bias hypotheses, keeping the idle vibration level.
         speedObserver.completeCalibration(start: .infinity, end: .infinity)
+        record.vibrationBaseline = speedObserver.baseline
+        lastCalibration = record
         return record
     }
 

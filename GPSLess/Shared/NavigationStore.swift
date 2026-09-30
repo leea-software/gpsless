@@ -51,6 +51,9 @@ final class NavigationStore: ObservableObject {
     @Published private(set) var selectionProblem: String?
     /// A place shared from another maps app before the map finished loading.
     private var pendingSharedPlace: SharedPlace?
+    /// Counts places that arrived by link from the share sheet, so the screen
+    /// can close the search or settings sheet that would hide them.
+    @Published private(set) var sharedPlaceArrivals = 0
     private var routeGeneration = UUID()
     @Published var estimate: TrackingEstimate?
     @Published var sample: MotionSample?
@@ -444,6 +447,7 @@ final class NavigationStore: ObservableObject {
 
     func open(_ url: URL) {
         if let place = SharedPlaceResolver.place(fromAppURL: url) {
+            sharedPlaceArrivals += 1
             useSharedPlace(place)
         }
     }

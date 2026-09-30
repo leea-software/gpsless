@@ -23,7 +23,7 @@ An iPhone app that tracks a car along a chosen route without GPS. Speed comes fr
 - After adding or removing files: `xcodegen generate` (`project.yml` is the source of truth) and commit the regenerated `GPSLess.xcodeproj`.
 - Simulator build: `xcodebuild -project GPSLess.xcodeproj -scheme GPSLess -destination 'generic/platform=iOS Simulator' build`.
 - App and UI tests: `xcodebuild -project GPSLess.xcodeproj -scheme GPSLess -destination 'platform=iOS Simulator,name=<an available iPhone>' test`.
-- Replay a recording with the current engine: `swiftc -O Core/*.swift tools/replay_raw/main.swift -o build/replay-raw`, then `build/replay-raw GPSLess/OfflineData/<region>-graph.json <drive.jsonl.gz> build/out.jsonl 3000`.
+- Replay a recording with the current engine: `swiftc -O Core/*.swift tools/replay_raw/main.swift -o build/replay-raw`, then `build/replay-raw GPSLess/OfflineData/<region>-graph.json <drive.jsonl.gz> build/out.jsonl 3000`. Keep each drive's previous recording in the same folder: drives before 0.4.2 that reused the app's calibration replay correctly only through it.
 - Rebuild map data (needs OSM extracts in `data-source/`): run `tools/build_kyiv.py` or `tools/build_lviv.py`, then `build_search.py <region>` and `build_pois.py <region>` from `tools/`.
 - Corridor map for a long journey: `tools/build_corridor.py local-<name> "<Name>" --source … --via LAT,LON[,RADIUS_KM] …` (see docs/TECHNICAL.md). Its `local-*` files are personal and never committed.
 - Privacy check before any commit you might publish: `python3 tools/privacy_check.py`.

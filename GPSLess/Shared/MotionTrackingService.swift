@@ -98,6 +98,10 @@ final class MotionTrackingService {
                     recordingVersion = 4
                 }
                 try recorder.begin(header: DriveHeader(version: recordingVersion, created: Date(), mapSnapshot: graph.dataset.generated, initialPosition: position, initialUncertainty: uncertainty, seed: 7829, mount: "portrait, screen facing straight back, vehicle stopped", sessionID: token.uuidString, startUptime: ProcessInfo.processInfo.systemUptime, metadata: metadata, reference: nil, route: route))
+                if reuseCalibration && self.processor.calibrated, let reused = self.processor.reusedCalibration() {
+                    // Replays start from this instead of the previous drive.
+                    recorder.write(DriveEntry(kind: "calibration", calibration: reused, wallTime: Date()))
+                }
                 self.recorder = recorder
             } catch {
                 DispatchQueue.main.async {

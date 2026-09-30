@@ -321,6 +321,20 @@ final class SpeedGridFilter {
     /// integrated acceleration instead of jumping between peaks.
     static let highwayEchoShare = 0.45
     static let highwayEchoSpeeds = 25.0...32.0
+    /// Below about 20 km/h the echo is rarely measurable: on field drives the
+    /// strongest correlation peak lay within 8% of the true delay in 10% of
+    /// windows, close to chance, while short-delay correlation in slow turns
+    /// supported speeds three to six times too high. Evidence weight falls to
+    /// this share below the range, for every hypothesis alike.
+    static let lowSpeedEchoShare = 0.4
+    static let lowSpeedEchoSpeeds = 3.0...5.5
+    /// A true axle echo is one delay. Tyre non-uniformity repeats every wheel
+    /// revolution, and its correlation repeats at every multiple of that
+    /// period: on field drives a comb sat at 0.785, 1.57 and 2.36 times the
+    /// axle delay, and its first tooth held the speed 1.2–1.36 times too high
+    /// for up to a minute at 45–60 km/h. Evidence at a delay is reduced by
+    /// this multiple of the mean positive evidence at twice and three times it.
+    static let repeatPenalty = 2.0
     static let biases = (0...40).map { Double($0 - 20) * 0.04 }
     static let hop = 0.5
     static let movingFloor = 0.1
@@ -340,6 +354,8 @@ final class SpeedGridFilter {
     private let lagIndex: [Int]
     private let lagFraction: [Double]
     private let echoSupported: [Bool]
+    /// Unclamped axle delay per speed row, in fine lag steps.
+    private let echoLags: [Double]
     private var speedCount: Int { Self.speeds.count }
     private var biasCount: Int { Self.biases.count }
 
@@ -349,10 +365,13 @@ final class SpeedGridFilter {
         var indices: [Int] = []
         var fractions: [Double] = []
         var supported: [Bool] = []
+        var delays: [Double] = []
         let maximumLag = Double(AxleEchoAnalyzer.maximumLag)
         let resolution = Double(AxleEchoAnalyzer.lagResolution)
         for speed in Self.speeds {
-            let lag = clamp(wheelbase / max(speed, 1e-3) * AxleEchoAnalyzer.sampleRate * resolution, 0, maximumLag * resolution - 2)
+            let delay = wheelbase / max(speed, 1e-3) * AxleEchoAnalyzer.sampleRate * resolution
+            delays.append(delay)
+            let lag = clamp(delay, 0, maximumLag * resolution - 2)
             indices.append(Int(lag))
             fractions.append(lag - Double(Int(lag)))
             supported.append(speed >= wheelbase / (maximumLag / AxleEchoAnalyzer.sampleRate - 0.05)
@@ -361,6 +380,7 @@ final class SpeedGridFilter {
         lagIndex = indices
         lagFraction = fractions
         echoSupported = supported
+        echoLags = delays
         resetStopped()
     }
 
@@ -456,7 +476,7 @@ final class SpeedGridFilter {
                 let residual = zip(correlation, background).map { value, reference in
                     return value - reference
                 }
-                let gain = echoGain * highwayEchoScale(next)
+                let gain = echoGain * echoScale(next)
                 let tail = residual[(10 * AxleEchoAnalyzer.lagResolution)...]
                 let mean = tail.reduce(0, +) / Double(tail.count)
                 let noise = sqrt(tail.reduce(0) { total, value in
@@ -467,7 +487,7 @@ final class SpeedGridFilter {
                 var peak = -Double.infinity
                 for row in 0..<speedCount {
                     let value = (1 - lagFraction[row]) * residual[lagIndex[row]] + lagFraction[row] * residual[lagIndex[row] + 1]
-                    scores[row] = clamp(gain * value / noise, -20, 20)
+                    scores[row] = clamp(gain * echoEvidence(residual, row: row) / noise, -20, 20)
                     if echoSupported[row] {
                         supportedScores.append(scores[row])
                         peak = max(peak, value / noise)
@@ -543,8 +563,36 @@ final class SpeedGridFilter {
                          bias: bias, echoStrength: echoStrength, movingProbability: movingProbability)
     }
 
+    /// Residual correlation at a speed row's axle delay, less what repeats at
+    /// its multiples.
+    func echoEvidence(_ residual: [Double], row: Int) -> Double {
+        let value = (1 - lagFraction[row]) * residual[lagIndex[row]] + lagFraction[row] * residual[lagIndex[row] + 1]
+        guard echoSupported[row] else {
+            return value
+        }
+        return value - Self.repeatPenalty * repeatedEvidence(residual, delay: echoLags[row])
+    }
+
+    /// Mean positive correlation at twice and three times a delay, where a
+    /// repeating wheel vibration also correlates but a single echo does not.
+    private func repeatedEvidence(_ residual: [Double], delay: Double) -> Double {
+        var total = 0.0
+        var count = 0
+        for multiple in [2.0, 3.0] {
+            let lag = delay * multiple
+            guard lag < Double(residual.count - 2) else {
+                continue
+            }
+            let index = Int(lag)
+            let fraction = lag - Double(index)
+            total += (1 - fraction) * residual[index] + fraction * residual[index + 1]
+            count += 1
+        }
+        return count > 0 ? max(0, total / Double(count)) : 0
+    }
+
     /// Echo weight for the predicted mean speed.
-    private func highwayEchoScale(_ predicted: [Double]) -> Double {
+    private func echoScale(_ predicted: [Double]) -> Double {
         var total = 0.0
         var mean = 0.0
         for row in 0..<speedCount {
@@ -554,9 +602,11 @@ final class SpeedGridFilter {
             }
         }
         let speed = total > 0 ? mean / total : 0
-        let range = Self.highwayEchoSpeeds
-        let fraction = clamp((speed - range.lowerBound) / (range.upperBound - range.lowerBound), 0, 1)
-        return 1 - fraction * (1 - Self.highwayEchoShare)
+        let highway = Self.highwayEchoSpeeds
+        let fast = clamp((speed - highway.lowerBound) / (highway.upperBound - highway.lowerBound), 0, 1)
+        let low = Self.lowSpeedEchoSpeeds
+        let moving = clamp((speed - low.lowerBound) / (low.upperBound - low.lowerBound), 0, 1)
+        return (1 - fast * (1 - Self.highwayEchoShare)) * (Self.lowSpeedEchoShare + (1 - Self.lowSpeedEchoShare) * moving)
     }
 
     private func normalize() {

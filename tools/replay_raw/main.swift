@@ -41,6 +41,60 @@ var lastUpdate = 0.0
 var failure: String?
 var sampleCount = 0
 var limitReached = false
+var calibrationSource = "parked calibration in this recording"
+
+let reusedCalibrationMarker = "reused-from-current-app-session"
+
+/// The recording a reusing drive took its calibration from, next to it.
+func previousRecording(of url: URL, header: DriveHeader) -> URL? {
+    guard let name = header.metadata?["previousRecording"], !name.isEmpty else {
+        return nil
+    }
+    let directory = url.deletingLastPathComponent()
+    let base = name.hasSuffix(".gz") ? String(name.dropLast(3)) : name
+    return [base + ".gz", base].map { candidate in
+        return directory.appendingPathComponent(candidate)
+    }.first { candidate in
+        return FileManager.default.fileExists(atPath: candidate.path)
+    }
+}
+
+/// Before 0.4.2 a drive that reused the app's calibration did not record it.
+/// Running the earlier drives' raw motion through a processor rebuilds the
+/// gravity, gyro bias and parked vibration baseline the app carried over.
+func primedProcessor(from url: URL, depth: Int = 0) throws -> VehicleMotionProcessor? {
+    guard depth < 8 else {
+        return nil
+    }
+    var primed: VehicleMotionProcessor?
+    var failed = false
+    try RecordingReader.read(url) { entry, _ in
+        if let header = entry.header {
+            let wheelbase = header.metadata?["wheelbaseMetres"].flatMap(Double.init) ?? VehicleSpeedObserver.defaultWheelbase
+            if header.metadata?["startupCalibration"] == reusedCalibrationMarker,
+               let prior = previousRecording(of: url, header: header),
+               let carried = try primedProcessor(from: prior, depth: depth + 1) {
+                carried.adoptWheelbase(wheelbase)
+                carried.beginSession(reusingCalibration: true)
+                primed = carried
+            } else {
+                primed = VehicleMotionProcessor(wheelbase: wheelbase)
+            }
+            return
+        }
+        guard let processor = primed, !failed else {
+            return
+        }
+        if entry.kind == "calibration", let calibration = entry.calibration, calibration.reason == "reused" {
+            processor.resume(from: calibration)
+        } else if entry.kind == "event", entry.event == "confirmed-stop" {
+            _ = processor.confirmStop()
+        } else if entry.kind == "raw", let raw = entry.raw, processor.receive(raw).failure != nil {
+            failed = true
+        }
+    }
+    return primed?.calibrated == true ? primed : nil
+}
 
 func write(_ entry: DriveEntry) throws {
     try output.write(contentsOf: encoder.encode(entry) + Data([0x0a]))
@@ -67,6 +121,16 @@ try RecordingReader.read(input) { entry, _ in
         }
         let wheelbase = wheelbaseOverride ?? header.metadata?["wheelbaseMetres"].flatMap(Double.init) ?? VehicleSpeedObserver.defaultWheelbase
         processor = VehicleMotionProcessor(wheelbase: wheelbase)
+        if header.metadata?["startupCalibration"] == reusedCalibrationMarker {
+            if let prior = previousRecording(of: input, header: header), let carried = try primedProcessor(from: prior) {
+                carried.adoptWheelbase(wheelbase)
+                carried.beginSession(reusingCalibration: true)
+                processor = carried
+                calibrationSource = "carried over from \(prior.lastPathComponent)"
+            } else {
+                calibrationSource = "reused on the phone but not available; waits for a parked calibration"
+            }
+        }
         let tracker = TrackingEngine(graph: graph, seed: header.seed, route: route)
         if let weight = header.metadata?["wheelbaseEvidenceWeight"].flatMap(Double.init),
            let metres = header.metadata?["wheelbaseEvidenceMetres"].flatMap(Double.init),
@@ -84,6 +148,7 @@ try RecordingReader.read(input) { entry, _ in
         copy.header?.metadata?["reprocessedWithEngine"] = TrackingEngine.version
         copy.header?.metadata?["reprocessedWithMotion"] = VehicleMotionProcessor.method
         copy.header?.metadata?["reprocessedWithWheelbaseMetres"] = String(format: "%.3f", processor.wheelbase)
+        copy.header?.metadata?["reprocessedCalibration"] = calibrationSource
         copy.header?.metadata?["validation"] = "Raw replay; no independent field ground truth"
         if assumedRoute != nil {
             copy.header?.metadata?["routeSource"] = "Retrospective assumed route; not selected by the driver before recording"
@@ -106,6 +171,10 @@ try RecordingReader.read(input) { entry, _ in
             diagnostic.fusedPositionChangeMetres = 0
         }
         try write(DriveEntry(kind: "visual-speed", visualSpeed: diagnostic))
+    }
+    if entry.kind == "calibration", let calibration = entry.calibration, calibration.reason == "reused", sampleCount == 0,
+       processor.resume(from: calibration) {
+        calibrationSource = "reused calibration recorded at the start"
     }
     if entry.kind == "event", entry.event == "confirmed-stop" {
         let calibration = processor.confirmStop()
@@ -181,5 +250,5 @@ try output.close()
 let summary: [String: Any] = ["engine": TrackingEngine.version, "motionProcessing": VehicleMotionProcessor.method,
                               "samples": sampleCount, "status": engine?.estimate?.status ?? "no samples",
                               "failure": failure ?? "none", "speedCorrections": engine?.speedCorrectionCount ?? 0,
-                              "noIndependentFieldGroundTruth": true]
+                              "noIndependentFieldGroundTruth": true, "calibration": calibrationSource]
 try FileHandle.standardOutput.write(contentsOf: JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys]) + Data([0x0a]))

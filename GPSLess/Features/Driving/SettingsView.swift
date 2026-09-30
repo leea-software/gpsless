@@ -137,7 +137,8 @@ struct SensorDetailsView: View {
             }
             .listRowBackground(Theme.surface)
             Section("Position") {
-                LabeledContent("Uncertainty", value: store.estimate.map { Format.distance($0.uncertainty) } ?? "—")
+                LabeledContent("Typical error", value: store.estimate.map { "±" + Format.distance($0.typicalError) } ?? "—")
+                LabeledContent("Outer bound", value: store.estimate.map { Format.distance($0.uncertainty) } ?? "—")
                 LabeledContent("Road hypothesis mass", value: String(format: "%.0f%%", (store.estimate?.roadProbability ?? 0) * 100))
                 LabeledContent("Turn fixes", value: "\(store.estimate?.anchorCount ?? 0)")
             }
